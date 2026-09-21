@@ -1,0 +1,4 @@
+.DS_Store
+output/
+venv/
+__pycache__/
