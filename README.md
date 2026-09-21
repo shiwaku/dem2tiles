@@ -57,7 +57,9 @@ $ docker run --rm -u `id -u`:`id -g` -v $(pwd)/data/out:/input -v $(pwd)/output:
 Creating output file that is 1707P x 1045L.
 [dem2tiles] replacing nodata (-9999) with 0
 [dem2tiles] building mapbox tiles (z5-17)
+tile_driver: 3460 tile(s) intersect the inputs (z5-17)
 [dem2tiles] building terrarium tiles (z5-17)
+tile_driver: 3460 tile(s) intersect the inputs (z5-17)
 [dem2tiles] building gsidem tiles (z5-18)
 [dem2tiles] done
 ```
@@ -120,6 +122,25 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 
 512 px タイルで z18 まで作ると、タイル数が 4 倍になったうえで元データに無い解像度を
 作ることになる。
+
+## データのあるタイルだけ作る
+
+`rio rgbify` と `rio terrarium` は入力の外接矩形に含まれるタイルを機械的に列挙し、
+データが届かないタイルも `FILL_VALUE` 一色として符号化する。密な DEM なら問題ないが、
+測線状・飛び地状のデータでは大半が中身のないタイルになる。
+
+`tile_driver.py` が入力図郭のフットプリントから、データが届くタイルだけを列挙して
+タイラーに渡す。生成後に消すのではなく生成対象そのものを絞るので、時間も容量も減る。
+
+静岡県の航空レーザ測深（1164 図郭、外接矩形 107 x 58.9 km、有効データ 61.6 km2）での実測:
+
+| | 対象を絞る前 | 絞った後 |
+| --- | --- | --- |
+| mapbox / terrarium | 136,148 枚・39 分 | **3,460 枚・5 分** |
+| 容量（3形式合計） | 約 1.8 GB | **715 MB** |
+
+`gdal2NPtiles` は nodata を保持した `merged.tif` を読むので、もともとデータのない
+タイルを書き出さない。絞り込みは RGB 系にだけ要る。
 
 ## 入力の検証
 
