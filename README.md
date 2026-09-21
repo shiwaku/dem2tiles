@@ -51,10 +51,13 @@ $ docker run --rm -u `id -u`:`id -g` -v $(pwd)/data/out:/input -v $(pwd)/output:
 [dem2tiles] source CRS: EPSG:6676, pixel size: 0.500000 m, centre latitude: 35.666033
 [dem2tiles] RGB_MAX_ZOOM=auto -> 18
 [dem2tiles] GSIDEM_MAX_ZOOM=auto -> 18
+[dem2tiles] merging 4 GeoTIFF(s)
 [dem2tiles] reprojecting EPSG:6676 -> EPSG:4326
 Creating output file that is 1707P x 1045L.
 [dem2tiles] replacing nodata (-9999) with 0
-...
+[dem2tiles] building mapbox tiles (z5-18)
+[dem2tiles] building terrarium tiles (z5-18)
+[dem2tiles] building gsidem tiles (z5-18)
 [dem2tiles] done
 ```
 
@@ -81,6 +84,7 @@ z5〜18 で3形式それぞれ 83 タイルが出る。
 | `RGBIFY_BASE` | `-10000` | Terrain-RGB の基準値 |
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
 | `JOBS` | `nproc` | 並列数 |
+| `FORCE` | *(なし)* | 空でなければ既存の出力を無視して全部作り直す |
 
 `TARGET_SRS` は入力から読み取った `EPSG:xxxx` と文字列で比較する。`epsg:4326` のような
 別表記や WKT を渡すと一致せず、毎回再投影が走る。
@@ -116,9 +120,6 @@ Reproject them to a common CRS first.
 
 ## 中間ファイルと再実行
 
-各ステップは出力が既にあればスキップする。全部そろった状態で再実行すると、何もせずに
-終わる。
-
 - `output/input_files.txt` — 拾った入力の一覧
 - `output/merged.vrt` — 入力をまとめた仮想ラスタ
 - `output/merged.tif` — 再投影済み。NoData は保持。地理院標高タイルの元
@@ -126,29 +127,46 @@ Reproject them to a common CRS first.
   `OUTPUTS` に `mapbox` も `terrarium` も無いときは作られない
 - `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles
 - `output/mapbox`, `output/terrarium`, `output/gsidem` — 展開済みタイル
+- `output/.state/` — 各ステップの完了マーカー
 
 なお `output/gsidem` には gdal2NPtiles が生成する確認用ビューア
 （`leaflet.html` / `openlayers.html` / `googlemaps.html` / `mapml.mapml`）も入る。
 
-### 作り直すとき
+### スキップの条件
 
-**mbtiles と展開済みディレクトリは対にして消すこと。** mbtiles だけ消すと、`mb-util` が
-既存のディレクトリに書けずに落ちる。
+ステップを飛ばすのは、次の3つがすべて成り立つときだけ。
 
-```bash
-rm -rf output/mapbox.mbtiles output/mapbox
+1. `output/.state/` に完了マーカーがある
+2. マーカーに記録された設定のフィンガープリントが今回と一致する
+3. そのステップの出力がすべて存在する
+
+どれかが崩れていれば、そのステップの出力を消してから作り直す。マーカーはステップが
+最後まで通ったときにしか書かれないので、途中で失敗した成果物が「完了」とみなされる
+ことはない。
+
+フィンガープリントは上流のステップのものを含む。入力の顔ぶれや `TARGET_SRS` を変えれば
+その下流がすべて作り直され、`RGB_MAX_ZOOM` だけを変えれば `mapbox` と `terrarium` だけが
+作り直される。
+
+```console
+$ docker run ... -e RGB_MAX_ZOOM=16 dem2tiles
+[dem2tiles] merge is up to date, skipping
+[dem2tiles] nodata fill is up to date, skipping
+[dem2tiles] building mapbox tiles (z5-16)
+[dem2tiles] building terrarium tiles (z5-16)
+[dem2tiles] gsidem tiles are up to date, skipping
 ```
 
-### スキップ判定の限界
+出力の一部を手で消した場合も、そのステップだけが作り直される。mbtiles と展開済み
+ディレクトリのどちらを消しても同じ結果になる。
 
-スキップ判定は出力の**存在**しか見ていない。そのため次のケースでは、古い結果が残った
-まま正常終了する。
+すべて作り直したいときは `FORCE=1` を渡すか、`output/` を消す。
 
-- 途中で失敗した実行の成果物も「完了」とみなされる
-- ズームや符号化の設定を変えて再実行しても、既存の出力があれば反映されない
+### 検出できないもの
 
-確実に作り直したいときは `output/` を消してから実行する。詳細と改善案は
-[#4](https://github.com/shiwaku/dem2tiles/issues/4)。
+入力の指紋はファイルパスの一覧だけを見ている。ラスタの中身までハッシュすると変換より
+高くつくため。**ファイル名を変えずに中身を差し替えた場合は検出できない**ので、そのときは
+`FORCE=1` を使う。
 
 ## 補足
 
