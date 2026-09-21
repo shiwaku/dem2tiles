@@ -1,0 +1,242 @@
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+:root {
+  --bg: #eef1f4;
+  --panel: rgba(255, 255, 255, 0.92);
+  --ink: #1b1f24;
+  --muted: #5d6771;
+  --line: #d8dee5;
+  --accent: #2a78d6;
+  --accent-ink: #ffffff;
+  --chip: rgba(42, 120, 214, 0.1);
+  --note-bg: #fff7e8;
+  --note-line: #e6c477;
+  --note-ink: #6a4906;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  /* ネイティブのフォーム部品（select のドロップダウン、スクロールバー）の地色。
+     パネル自体は半透明だが、こちらは不透明でないと選択肢が下地と混ざる。 */
+  --field-bg: #ffffff;
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  --bg: #0f1318;
+  --panel: rgba(26, 31, 38, 0.92);
+  --ink: #e7ebf0;
+  --muted: #97a2ad;
+  --line: #2f3740;
+  --accent: #58a6ff;
+  --accent-ink: #0d1117;
+  --chip: rgba(88, 166, 255, 0.14);
+  --note-bg: #2c2412;
+  --note-line: #67521f;
+  --note-ink: #e6c98d;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  --field-bg: #1f242b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 13.5px/1.6 system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans',
+        'Noto Sans JP', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+#map { position: absolute; inset: 0; }
+
+/* ---- パネル ---- */
+.panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 300px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 2;
+  overflow: hidden;
+}
+@media (max-width: 680px) {
+  .panel { left: 8px; right: 8px; width: auto; max-height: 56%; }
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.brand-mark { font-size: 15px; }
+.panel h1 { font-size: 14px; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
+.head-actions { margin-left: auto; display: flex; gap: 4px; }
+.icon-btn {
+  width: 26px; height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--muted); }
+
+.panel-body { overflow-y: auto; padding: 12px 14px 14px; }
+.panel.collapsed .panel-body { display: none; }
+
+.field { margin-bottom: 14px; }
+.field:last-child { margin-bottom: 0; }
+.field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.field-label {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--muted);
+}
+.count-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--chip);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- セグメント（排他選択） ---- */
+.seg { display: flex; gap: 4px; flex-wrap: wrap; }
+.seg button {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 縦並び。標高タイルは名前が長く、横に詰めると省略記号で読めなくなる。 */
+.seg-v { flex-direction: column; }
+.seg-v button { flex: none; text-align: left; }
+
+.seg button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* ---- トグル ---- */
+.toggle {
+  display: flex; align-items: center; gap: 9px;
+  padding: 4px 0; cursor: pointer; user-select: none;
+}
+.toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch {
+  width: 32px; height: 18px; flex: none;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  transition: background 0.15s;
+}
+.switch::after {
+  content: '';
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.toggle input:checked + .switch { background: var(--accent); }
+.toggle input:checked + .switch::after { transform: translateX(14px); }
+.toggle input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+.t-label { font-weight: 500; }
+
+.slider-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0 6px 41px;
+  font-size: 12px; color: var(--muted);
+}
+.slider-row input[type='range'] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.op-val { min-width: 3em; text-align: right; font-variant-numeric: tabular-nums; }
+
+.select {
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--field-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+/* ドロップダウンの選択肢は OS 側が描く。背景を指定しないと、ダークでは
+   白地のまま文字色だけ明色を継いで読めなくなる。 */
+.select option {
+  background: var(--field-bg);
+  color: var(--ink);
+}
+
+/* ---- 凡例 ---- */
+.legend-bar {
+  display: flex; height: 12px; margin-top: 8px;
+  border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
+}
+.legend-bar span { flex: 1; }
+.legend-ticks {
+  display: flex; margin-top: 3px;
+  font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.legend-ticks span { flex: 1; text-align: center; }
+.legend-ticks span:first-child { text-align: left; }
+.legend-ticks span:last-child { text-align: right; }
+
+.note {
+  background: var(--note-bg);
+  border: 1px solid var(--note-line);
+  color: var(--note-ink);
+  border-radius: 8px;
+  padding: 7px 9px;
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.note:empty { display: none; }
+.note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: rgba(127, 127, 127, 0.18);
+  padding: 1px 4px; border-radius: 3px;
+}
+
+.readout {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  font-size: 11.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.readout b { color: var(--ink); font-weight: 600; }
+.tile-url {
+  margin-top: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  word-break: break-all;
+}
+
+/* MapLibre 側のコントロールをテーマに合わせる */
+.maplibregl-ctrl-attrib { font-size: 10.5px; }
