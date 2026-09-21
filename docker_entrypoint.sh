@@ -26,6 +26,8 @@ RESAMPLING="${RESAMPLING:-bilinear}"
 # Terrain-RGB encoding parameters
 RGBIFY_BASE="${RGBIFY_BASE:--10000}"
 RGBIFY_INTERVAL="${RGBIFY_INTERVAL:-0.1}"
+# 数値PNGタイルの分解能。地理院標高タイル（PNG形式）の仕様は 0.01 m。
+GSIDEM_RESOLUTION="${GSIDEM_RESOLUTION:-0.01}"
 JOBS="${JOBS:-$(nproc)}"
 # Rebuild everything, ignoring what is already in the output directory.
 FORCE="${FORCE:-}"
@@ -219,7 +221,7 @@ fi
 # ---------------------------------------------------------------------------
 # GSI numerical DEM tiles (nodata preserved)
 # ---------------------------------------------------------------------------
-GSIDEM_FP=$(fingerprint "$MERGE_FP" "$GSIDEM_MIN_ZOOM" "$GSIDEM_MAX_ZOOM" "$DST_NODATA")
+GSIDEM_FP=$(fingerprint "$MERGE_FP" "$GSIDEM_MIN_ZOOM" "$GSIDEM_MAX_ZOOM" "$DST_NODATA" "$GSIDEM_RESOLUTION")
 
 if want gsidem; then
     if step_current gsidem "$GSIDEM_FP" "$OUTPUT_DIR/gsidem"; then
@@ -228,6 +230,7 @@ if want gsidem; then
         step_begin gsidem "$OUTPUT_DIR/gsidem"
         log "building gsidem tiles (z$GSIDEM_MIN_ZOOM-$GSIDEM_MAX_ZOOM)"
         /usr/bin/python3 /usr/local/bin/gdal2NPtiles.py --numerical \
+            --numerical-resolution "$GSIDEM_RESOLUTION" \
             --processes="$JOBS" --xyz -a "$DST_NODATA" \
             -z "$GSIDEM_MIN_ZOOM-$GSIDEM_MAX_ZOOM" \
             "$MERGED" "$OUTPUT_DIR/gsidem"
