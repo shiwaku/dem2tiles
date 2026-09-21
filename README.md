@@ -7,11 +7,13 @@ DEM の GeoTIFF を標高タイルに変換する。
 
 入力ディレクトリの GeoTIFF をまとめて、3種類のタイルを出力する。
 
-| 出力 | 形式 | 出力先 |
-| --- | --- | --- |
-| Mapbox Terrain-RGB | PNG（`mbtiles` と展開済みディレクトリ） | `output/mapbox` |
-| Terrarium | PNG（`mbtiles` と展開済みディレクトリ） | `output/terrarium` |
-| 地理院標高タイル | テキストタイル | `output/gsidem` |
+| 出力 | 形式 | タイルサイズ | 出力先 |
+| --- | --- | --- | --- |
+| Mapbox Terrain-RGB | PNG（`mbtiles` と展開済みディレクトリ） | 512 | `output/mapbox` |
+| Terrarium | PNG（`mbtiles` と展開済みディレクトリ） | 512 | `output/terrarium` |
+| 地理院標高タイル | PNG（数値PNGタイル） | 256 | `output/gsidem` |
+
+タイルサイズが揃っていないのは意図的で、地理院標高タイルの仕様が 256 のため。
 
 ## 使い方
 
