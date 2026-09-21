@@ -36,6 +36,48 @@ MERGED="$OUTPUT_DIR/merged.tif"
 FILLED="$OUTPUT_DIR/merged_filled.tif"
 STATE_DIR="$OUTPUT_DIR/.state"
 
+# Creation options for the merged rasters.
+#
+# TILED is not optional at this scale. A stripped GeoTIFF puts one row per
+# strip, and a wide extent makes that row huge: 222,948 px of float32 is
+# 891 KB. gdalwarp writes the destination in rectangular chunks, and every
+# partial write into a compressed strip costs a decompress-modify-recompress
+# of the whole strip. Writing a wide raster that way rewrites the same strips
+# over and over: a 22.66 Gpx destination made no progress at all in 18 minutes
+# (the write offset went backwards), while the same warp with TILED finished
+# in 150 seconds.
+#
+# SPARSE_OK keeps blocks that are entirely nodata out of the file. Coastal or
+# survey-line data covers a small fraction of its bounding box — one real
+# dataset came to 0.98% — and those blocks cost nothing to skip.
+#
+# DEFLATE at level 1 beats LZW here: a little larger, noticeably faster, and
+# the intermediate files are deleted once the tiles exist.
+BLOCKSIZE="${BLOCKSIZE:-512}"
+COMPRESS="${COMPRESS:-DEFLATE}"
+CREATE_OPTS=(
+    -co TILED=YES
+    -co "BLOCKXSIZE=$BLOCKSIZE"
+    -co "BLOCKYSIZE=$BLOCKSIZE"
+    -co "COMPRESS=$COMPRESS"
+    -co SPARSE_OK=TRUE
+    -co BIGTIFF=YES
+)
+# gdal_calc.py spells the same thing differently.
+CALC_OPTS=(
+    --co=TILED=YES
+    --co="BLOCKXSIZE=$BLOCKSIZE"
+    --co="BLOCKYSIZE=$BLOCKSIZE"
+    --co="COMPRESS=$COMPRESS"
+    --co=SPARSE_OK=TRUE
+    --co=BIGTIFF=YES
+)
+# ZLEVEL only exists for DEFLATE; GTiff warns about it under any other codec.
+if [ "$COMPRESS" = "DEFLATE" ]; then
+    CREATE_OPTS+=(-co ZLEVEL=1)
+    CALC_OPTS+=(--co=ZLEVEL=1)
+fi
+
 want() {
     [[ " ${OUTPUTS//,/ } " == *" $1 "* ]]
 }
@@ -121,19 +163,23 @@ PROBE_OUT="$(/opt/rio/bin/python /usr/local/bin/probe.py "$FILE_LIST")"
 eval "$PROBE_OUT"
 log "source CRS: ${SRC_SRS:-unknown}, pixel size: ${NATIVE_RES_M} m, centre latitude: ${CENTRE_LAT}"
 
+# The two tile sets resolve the same grid at different zooms, because
+# rio-rgbify and rio-terrarium render 512 px tiles while gdal2NPtiles renders
+# 256 px ones. Using the 256 px answer for both asks the RGB tilers for four
+# times as many tiles, each oversampled twice over.
 if [ "$RGB_MAX_ZOOM" = "auto" ]; then
-    RGB_MAX_ZOOM="$NATIVE_ZOOM"
-    log "RGB_MAX_ZOOM=auto -> $RGB_MAX_ZOOM"
+    RGB_MAX_ZOOM="$NATIVE_ZOOM_512"
+    log "RGB_MAX_ZOOM=auto -> $RGB_MAX_ZOOM (512 px tiles)"
 fi
 if [ "$GSIDEM_MAX_ZOOM" = "auto" ]; then
-    GSIDEM_MAX_ZOOM="$NATIVE_ZOOM"
-    log "GSIDEM_MAX_ZOOM=auto -> $GSIDEM_MAX_ZOOM"
+    GSIDEM_MAX_ZOOM="$NATIVE_ZOOM_256"
+    log "GSIDEM_MAX_ZOOM=auto -> $GSIDEM_MAX_ZOOM (256 px tiles)"
 fi
 
 # ---------------------------------------------------------------------------
 # Merge into a single GeoTIFF, reprojecting if needed
 # ---------------------------------------------------------------------------
-MERGE_FP=$(fingerprint "$INPUT_FP" "$SRC_NODATA" "$DST_NODATA" "$TARGET_SRS" "$RESAMPLING")
+MERGE_FP=$(fingerprint "$INPUT_FP" "$SRC_NODATA" "$DST_NODATA" "$TARGET_SRS" "$RESAMPLING" "$BLOCKSIZE" "$COMPRESS")
 
 if step_current merge "$MERGE_FP" "$MERGED"; then
     log "merge is up to date, skipping"
@@ -148,11 +194,11 @@ else
         log "reprojecting ${SRC_SRS:-unknown} -> $TARGET_SRS"
         gdalwarp -t_srs "$TARGET_SRS" -r "$RESAMPLING" \
             -dstnodata "$DST_NODATA" -multi -wo NUM_THREADS="$JOBS" \
-            -co COMPRESS=LZW -co BIGTIFF=YES -of GTiff \
+            "${CREATE_OPTS[@]}" -of GTiff \
             merged.vrt "$MERGED"
     else
         gdal_translate -a_nodata "$DST_NODATA" \
-            -co COMPRESS=LZW -co BIGTIFF=YES -of GTiff \
+            "${CREATE_OPTS[@]}" -of GTiff \
             merged.vrt "$MERGED"
     fi
     step_done merge "$MERGE_FP"
@@ -173,7 +219,7 @@ if want mapbox || want terrarium; then
         gdal_calc.py -A "$MERGED" --outfile="$FILLED" \
             --calc="where(A==$DST_NODATA, $FILL_VALUE, A)" \
             --NoDataValue=None --type=Float32 \
-            --co="COMPRESS=LZW" --co="BIGTIFF=YES"
+            "${CALC_OPTS[@]}"
         step_done fill "$FILL_FP"
     fi
 fi
