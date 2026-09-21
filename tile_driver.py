@@ -47,7 +47,7 @@ def main():
     ap.add_argument("--file-list", required=True, help="the inputs, for the footprint")
     ap.add_argument("--min-z", type=int, required=True)
     ap.add_argument("--max-z", type=int, required=True)
-    ap.add_argument("--format", default="png")
+    ap.add_argument("--format", choices=("png", "webp"), default="png")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--base-val", type=float, default=-10000.0)
     ap.add_argument("--interval", type=float, default=0.1)

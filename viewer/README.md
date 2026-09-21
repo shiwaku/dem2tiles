@@ -46,6 +46,15 @@ https://shi-works.com/raster-tiles/pref-shizuoka/shizuoka-alb-dem-png/{z}/{x}/{y
 キー設計は [shiwaku/xserver-cleanup](https://github.com/shiwaku/xserver-cleanup) の
 `R2-STRUCTURE.md` に従う（第1階層はアクセス方法、第2階層以下は変更しない）。
 
+### WebP のタイルを見る
+
+dem2tiles を `TILE_FORMAT=webp` で回した場合は `VITE_TILES_EXT=webp` を合わせる。
+terrarium と Terrain-RGB の拡張子だけが変わる。数値PNGは常に PNG なので対象外。
+
+```bash
+VITE_TILES_EXT=webp npm run dev
+```
+
 ## デプロイ
 
 `main` の `viewer/` が変わると GitHub Actions がビルドして Pages に出す

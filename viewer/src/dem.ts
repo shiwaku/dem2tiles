@@ -22,6 +22,14 @@ import type {
  */
 const BASE = import.meta.env.VITE_TILES_BASE ?? '/tiles'
 
+/**
+ * RGB 符号化タイル（terrarium / mapbox）の拡張子。
+ *
+ * dem2tiles の `TILE_FORMAT` に合わせる。WebP は可逆なので中身は PNG と同じで、
+ * 変わるのは URL の拡張子だけ。gsidem は常に PNG なのでここの対象外。
+ */
+const RGB_EXT = import.meta.env.VITE_TILES_EXT ?? 'png'
+
 export const ATTRIBUTION = 'dem2tiles'
 
 export type DemKind = 'terrarium' | 'mapbox' | 'gsidem'
@@ -49,7 +57,7 @@ export const DEMS: DemDef[] = [
     tileSize: 512,
     minzoom: 5,
     maxzoom: 17,
-    url: `${BASE}/shizuoka-alb-terrarium/{z}/{x}/{y}.png`,
+    url: `${BASE}/shizuoka-alb-terrarium/{z}/{x}/{y}.${RGB_EXT}`,
   },
   {
     key: 'mapbox',
@@ -57,7 +65,7 @@ export const DEMS: DemDef[] = [
     tileSize: 512,
     minzoom: 5,
     maxzoom: 17,
-    url: `${BASE}/shizuoka-alb-terrain-rgb/{z}/{x}/{y}.png`,
+    url: `${BASE}/shizuoka-alb-terrain-rgb/{z}/{x}/{y}.${RGB_EXT}`,
   },
   {
     key: 'gsidem',
