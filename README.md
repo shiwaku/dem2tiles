@@ -50,19 +50,19 @@ grid2geotiff の出力（0.5m グリッド 4図郭、EPSG:6676）を変換した
 $ docker run --rm -u `id -u`:`id -g` -v $(pwd)/data/out:/input -v $(pwd)/output:/output dem2tiles
 [dem2tiles] found 4 GeoTIFF(s) under /input
 [dem2tiles] source CRS: EPSG:6676, pixel size: 0.500000 m, centre latitude: 35.666033
-[dem2tiles] RGB_MAX_ZOOM=auto -> 18
-[dem2tiles] GSIDEM_MAX_ZOOM=auto -> 18
+[dem2tiles] RGB_MAX_ZOOM=auto -> 17 (512 px tiles)
+[dem2tiles] GSIDEM_MAX_ZOOM=auto -> 18 (256 px tiles)
 [dem2tiles] merging 4 GeoTIFF(s)
 [dem2tiles] reprojecting EPSG:6676 -> EPSG:4326
 Creating output file that is 1707P x 1045L.
 [dem2tiles] replacing nodata (-9999) with 0
-[dem2tiles] building mapbox tiles (z5-18)
-[dem2tiles] building terrarium tiles (z5-18)
+[dem2tiles] building mapbox tiles (z5-17)
+[dem2tiles] building terrarium tiles (z5-17)
 [dem2tiles] building gsidem tiles (z5-18)
 [dem2tiles] done
 ```
 
-z5〜18 で3形式それぞれ 83 タイルが出る。
+RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（後述）。
 
 ## 設定
 
@@ -86,6 +86,8 @@ z5〜18 で3形式それぞれ 83 タイルが出る。
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
 | `GSIDEM_RESOLUTION` | `0.01` | 数値PNGタイルの分解能 [m]。地理院仕様は 0.01 |
 | `JOBS` | `nproc` | 並列数 |
+| `BLOCKSIZE` | `512` | マージ後 GeoTIFF の内部ブロックサイズ |
+| `COMPRESS` | `DEFLATE` | マージ後 GeoTIFF の圧縮方式 |
 | `FORCE` | *(なし)* | 空でなければ既存の出力を無視して全部作り直す |
 
 `TARGET_SRS` は入力から読み取った `EPSG:xxxx` と文字列で比較する。`epsg:4326` のような
@@ -96,15 +98,28 @@ z5〜18 で3形式それぞれ 83 タイルが出る。
 `auto` は入力の画素サイズから決める。Web Mercator の地上分解能が入力の格子間隔より
 細かくなる最小のズームを選ぶので、元データの解像度をそのまま活かせる。
 
+**ズームはタイルサイズに依存する。** 512 px のタイルは 256 px のタイルと同じ範囲を
+倍の密度で描くので、同じ解像度に 1 段手前のズームで到達する。`rio rgbify` と
+`rio terrarium` は 512 px、`gdal2NPtiles` は 256 px なので、同じ入力でも正しい
+最大ズームが 1 段ちがう。
+
 0.5m グリッドを緯度 35.7° で変換した場合:
 
 ```
-[dem2tiles] source CRS: EPSG:6676, pixel size: 0.500000 m, centre latitude: 35.666033
-[dem2tiles] RGB_MAX_ZOOM=auto -> 18
+[dem2tiles] RGB_MAX_ZOOM=auto -> 17 (512 px tiles)
+[dem2tiles] GSIDEM_MAX_ZOOM=auto -> 18 (256 px tiles)
 ```
 
-緯度 35.7° での地上分解能は z16 で約 1.9 m/px、z17 で約 1.0 m/px、z18 で約 0.5 m/px。
-0.5m データを z16 で打ち切ると情報の 1/16 しか使わないことになる。
+緯度 35.7° での地上分解能:
+
+| ズーム | 256 px タイル | 512 px タイル |
+| --- | --- | --- |
+| z16 | 1.94 m/px | 0.97 m/px |
+| z17 | 0.97 m/px | **0.485 m/px** |
+| z18 | **0.485 m/px** | 0.243 m/px |
+
+512 px タイルで z18 まで作ると、タイル数が 4 倍になったうえで元データに無い解像度を
+作ることになる。
 
 ## 入力の検証
 
@@ -119,6 +134,29 @@ Reproject them to a common CRS first.
 
 `gdalbuildvrt` は座標系が食い違うファイルを警告だけ出して除外するため、放っておくと
 出力から一部の図郭が黙って欠ける。系をまたぐデータは事前に揃えること。
+
+## マージ後 GeoTIFF の作り方
+
+`merged.tif` はタイル型・スパースで書く。これは大きな範囲では必須で、既定を変えると
+処理が終わらなくなる。
+
+ストリップ型の GeoTIFF は 1 行を 1 ストリップにする。範囲が横に広いとこの 1 行が巨大に
+なり、float32 で 222,948 px なら 891 KB。`gdalwarp` は出力を矩形のチャンクに分けて
+書くので、圧縮されたストリップへの部分書き込みのたびに、そのストリップ全体を
+展開・修正・再圧縮することになる。同じストリップを何度も書き直し続けて前に進まない。
+
+実測（静岡県の航空レーザ測深、1164 図郭、出力 222,948 x 101,654 px）:
+
+| 作成オプション | `gdalwarp` の所要 |
+| --- | --- |
+| ストリップ型 | **18 分で 1 バイトも進まず**（書き込み位置が後退） |
+| `TILED=YES` + `SPARSE_OK=TRUE` | **150 秒**、613 MB |
+
+`SPARSE_OK` は全体が NoData のブロックをファイルに置かない。海岸線や測線に沿った
+データは外接矩形のごく一部しか埋めない（この例では 0.98%）ので効果が大きい。
+
+圧縮は DEFLATE の level 1。LZW より少し大きいが速く、中間ファイルはタイルができれば
+消してよいもの。`BLOCKSIZE` と `COMPRESS` で変更できる。
 
 ## 中間ファイルと再実行
 

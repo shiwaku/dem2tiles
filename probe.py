@@ -48,9 +48,15 @@ def native_res_m(src, lat):
     return res * factor
 
 
-def matching_zoom(res_m, lat):
-    """Smallest zoom whose Web Mercator resolution is finer than res_m."""
-    ground = EQUATORIAL_RES * math.cos(math.radians(lat))
+def matching_zoom(res_m, lat, tile_size=256):
+    """Smallest zoom whose Web Mercator resolution is finer than res_m.
+
+    The zoom that resolves a grid depends on how many pixels a tile carries.
+    A 512 px tile covers the same ground as a 256 px one, at twice the detail,
+    so it reaches the source resolution a zoom level earlier. Ignoring that
+    asks for four times as many tiles, each one oversampled.
+    """
+    ground = EQUATORIAL_RES * math.cos(math.radians(lat)) * 256 / tile_size
     return max(0, math.ceil(math.log2(ground / res_m)))
 
 
@@ -93,7 +99,10 @@ def main():
     print(f"SRC_SRS={key if key.startswith('EPSG:') else ''}")
     print(f"NATIVE_RES_M={res_m:.6f}")
     print(f"CENTRE_LAT={lat:.6f}")
-    print(f"NATIVE_ZOOM={matching_zoom(res_m, lat)}")
+    # One per tile size, because the tilers disagree: rio-rgbify and
+    # rio-terrarium render 512 px tiles, gdal2NPtiles renders 256 px ones.
+    print(f"NATIVE_ZOOM_256={matching_zoom(res_m, lat, 256)}")
+    print(f"NATIVE_ZOOM_512={matching_zoom(res_m, lat, 512)}")
 
 
 if __name__ == "__main__":
