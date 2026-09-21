@@ -25,7 +25,8 @@ docker run --rm -u `id -u`:`id -g` \
   dem2tiles
 ```
 
-`/input` 以下を再帰探索して `*.tif` / `*.tiff` を集める。
+`/input` 以下を再帰探索して `*.tif` / `*.tiff` を集める。拡張子の大文字小文字は
+区別しないので `*.TIF` も拾う。
 
 ### grid2geotiff からつなぐ
 
@@ -33,7 +34,7 @@ docker run --rm -u `id -u`:`id -g` \
 grid2geotiff convert data/raw -o data/out --crs EPSG:6676 -j 4
 docker run --rm -u `id -u`:`id -g` \
   -v $(pwd)/data/out:/input \
-  -v $(pwd)/tiles:/output \
+  -v $(pwd)/output:/output \
   dem2tiles
 ```
 
@@ -45,7 +46,7 @@ dem2tiles の既定値はそれをそのまま受けられるようにしてあ�
 grid2geotiff の出力（0.5m グリッド 4図郭、EPSG:6676）を変換した場合。
 
 ```console
-$ docker run --rm -v $(pwd)/data/out:/input -v $(pwd)/tiles:/output dem2tiles
+$ docker run --rm -u `id -u`:`id -g` -v $(pwd)/data/out:/input -v $(pwd)/output:/output dem2tiles
 [dem2tiles] found 4 GeoTIFF(s) under /input
 [dem2tiles] source CRS: EPSG:6676, pixel size: 0.500000 m, centre latitude: 35.666033
 [dem2tiles] RGB_MAX_ZOOM=auto -> 18
@@ -75,11 +76,14 @@ z5〜18 で3形式それぞれ 83 タイルが出る。
 | `SRC_NODATA` | *(なし)* | 入力の NoData 値を上書き。空なら GeoTIFF 埋め込み値を使う |
 | `DST_NODATA` | `-9999` | マージ後 GeoTIFF と地理院標高タイルの NoData 値 |
 | `FILL_VALUE` | `0` | RGB 符号化前に NoData を置き換える値 |
-| `TARGET_SRS` | `EPSG:4326` | 入力が別の座標系なら再投影する。空なら入力のまま |
+| `TARGET_SRS` | `EPSG:4326` | 入力が別の座標系なら再投影する。空なら入力のまま。`EPSG:xxxx` 形式で指定する（後述） |
 | `RESAMPLING` | `bilinear` | 再投影時のリサンプリング方法 |
 | `RGBIFY_BASE` | `-10000` | Terrain-RGB の基準値 |
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
 | `JOBS` | `nproc` | 並列数 |
+
+`TARGET_SRS` は入力から読み取った `EPSG:xxxx` と文字列で比較する。`epsg:4326` のような
+別表記や WKT を渡すと一致せず、毎回再投影が走る。
 
 ### 最大ズームの自動決定
 
@@ -110,20 +114,41 @@ Reproject them to a common CRS first.
 `gdalbuildvrt` は座標系が食い違うファイルを警告だけ出して除外するため、放っておくと
 出力から一部の図郭が黙って欠ける。系をまたぐデータは事前に揃えること。
 
-## 中間ファイル
+## 中間ファイルと再実行
 
-各ステップは出力が既にあればスキップするので、途中で失敗しても再実行すれば続きから走る。
+各ステップは出力が既にあればスキップする。全部そろった状態で再実行すると、何もせずに
+終わる。
 
 - `output/input_files.txt` — 拾った入力の一覧
 - `output/merged.vrt` — 入力をまとめた仮想ラスタ
 - `output/merged.tif` — 再投影済み。NoData は保持。地理院標高タイルの元
-- `output/merged_filled.tif` — NoData を `FILL_VALUE` に置換。RGB 系タイルの元
+- `output/merged_filled.tif` — NoData を `FILL_VALUE` に置換。RGB 系タイルの元。
+  `OUTPUTS` に `mapbox` も `terrarium` も無いときは作られない
 - `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles
-
-作り直したいときはこれらを消す。
+- `output/mapbox`, `output/terrarium`, `output/gsidem` — 展開済みタイル
 
 なお `output/gsidem` には gdal2NPtiles が生成する確認用ビューア
 （`leaflet.html` / `openlayers.html` / `googlemaps.html` / `mapml.mapml`）も入る。
+
+### 作り直すとき
+
+**mbtiles と展開済みディレクトリは対にして消すこと。** mbtiles だけ消すと、`mb-util` が
+既存のディレクトリに書けずに落ちる。
+
+```bash
+rm -rf output/mapbox.mbtiles output/mapbox
+```
+
+### スキップ判定の限界
+
+スキップ判定は出力の**存在**しか見ていない。そのため次のケースでは、古い結果が残った
+まま正常終了する。
+
+- 途中で失敗した実行の成果物も「完了」とみなされる
+- ズームや符号化の設定を変えて再実行しても、既存の出力があれば反映されない
+
+確実に作り直したいときは `output/` を消してから実行する。詳細と改善案は
+[#4](https://github.com/shiwaku/dem2tiles/issues/4)。
 
 ## 補足
 
