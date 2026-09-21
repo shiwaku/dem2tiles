@@ -13,7 +13,13 @@ import type {
  * 違いが出るならどこかが壊れている、という確認に使う。
  */
 
-/** タイルの配信元。dev では vite.config.ts が ../output をここに割り当てる。 */
+/**
+ * タイルの配信元。
+ *
+ * パスは配信側（R2）のキー名で書く。dem2tiles の出力ディレクトリ名とは違うが、
+ * 名前を2系統持つと URL の組み立てが env の値で分岐してしまう。dev では
+ * vite.config.ts が配信キー名から ../output の実ディレクトリへ読み替える。
+ */
 const BASE = import.meta.env.VITE_TILES_BASE ?? '/tiles'
 
 export const ATTRIBUTION = 'dem2tiles'
@@ -43,7 +49,7 @@ export const DEMS: DemDef[] = [
     tileSize: 512,
     minzoom: 5,
     maxzoom: 17,
-    url: `${BASE}/terrarium/{z}/{x}/{y}.png`,
+    url: `${BASE}/shizuoka-alb-terrarium/{z}/{x}/{y}.png`,
   },
   {
     key: 'mapbox',
@@ -51,7 +57,7 @@ export const DEMS: DemDef[] = [
     tileSize: 512,
     minzoom: 5,
     maxzoom: 17,
-    url: `${BASE}/mapbox/{z}/{x}/{y}.png`,
+    url: `${BASE}/shizuoka-alb-terrain-rgb/{z}/{x}/{y}.png`,
   },
   {
     key: 'gsidem',
@@ -59,7 +65,7 @@ export const DEMS: DemDef[] = [
     tileSize: 256,
     minzoom: 5,
     maxzoom: 18,
-    url: `${BASE}/gsidem/{z}/{x}/{y}.png`,
+    url: `${BASE}/shizuoka-alb-dem-png/{z}/{x}/{y}.png`,
   },
 ]
 

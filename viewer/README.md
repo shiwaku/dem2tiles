@@ -7,6 +7,8 @@ dem2tiles が出力する3種類の標高タイルを切り替えて確認する
 [shiwaku/ksj-suigai-rireki-converter](https://github.com/shiwaku/ksj-suigai-rireki-converter)
 の viewer に倣っている。
 
+公開版: https://shiwaku.github.io/dem2tiles/
+
 ## 使い方
 
 タイルを先に作っておく（リポジトリのルートで）。
@@ -24,8 +26,30 @@ npm install
 npm run dev
 ```
 
-`../output` は dev サーバが `/tiles` として配る（`vite.config.ts` のミドルウェア）。
-本番に置くときは同じパスにタイルを並べるか、`VITE_TILES_BASE` で配信元を指す。
+## タイルの配信元
+
+URL は配信側（R2）のキー名で組む。dem2tiles の出力ディレクトリ名とは違うが、名前を
+2系統持つと URL の組み立てが環境変数で分岐してしまうため、コードは配信キー名に統一し、
+dev サーバ側で実体へ読み替える（`vite.config.ts` の `KEY_TO_DIR`）。
+
+| 環境 | `VITE_TILES_BASE` | 実体 |
+| --- | --- | --- |
+| dev | `/tiles`（既定） | `../output/{terrarium,mapbox,gsidem}` |
+| 本番 | `https://shi-works.com/raster-tiles/pref-shizuoka` | R2 バケット `shi-works` |
+
+```
+https://shi-works.com/raster-tiles/pref-shizuoka/shizuoka-alb-terrarium/{z}/{x}/{y}.png
+https://shi-works.com/raster-tiles/pref-shizuoka/shizuoka-alb-terrain-rgb/{z}/{x}/{y}.png
+https://shi-works.com/raster-tiles/pref-shizuoka/shizuoka-alb-dem-png/{z}/{x}/{y}.png
+```
+
+キー設計は [shiwaku/xserver-cleanup](https://github.com/shiwaku/xserver-cleanup) の
+`R2-STRUCTURE.md` に従う（第1階層はアクセス方法、第2階層以下は変更しない）。
+
+## デプロイ
+
+`main` の `viewer/` が変わると GitHub Actions がビルドして Pages に出す
+（`.github/workflows/pages.yml`）。タイルの生成とアップロードは手元で行う。
 
 ## 中身
 

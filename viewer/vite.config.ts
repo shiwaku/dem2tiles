@@ -5,6 +5,17 @@ import { defineConfig, type Plugin } from 'vite'
 /** dem2tiles の出力ディレクトリ。viewer/ から見た相対位置。 */
 const TILE_DIR = '../output'
 
+/**
+ * 配信側（R2）のキー名 → dem2tiles の出力ディレクトリ名。
+ *
+ * コードはどちらの環境でも配信キー名で URL を組む。dev はここで実体へ読み替える。
+ */
+const KEY_TO_DIR: Record<string, string> = {
+  'shizuoka-alb-terrarium': 'terrarium',
+  'shizuoka-alb-terrain-rgb': 'mapbox',
+  'shizuoka-alb-dem-png': 'gsidem',
+}
+
 const TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.webp': 'image/webp',
@@ -31,7 +42,10 @@ function serveTiles(): Plugin {
           res.end()
           return
         }
-        const file = join(server.config.root, TILE_DIR, rel)
+        const [, first, ...rest] = rel.split('/')
+        const dir = KEY_TO_DIR[first ?? '']
+        if (!dir) return next()
+        const file = join(server.config.root, TILE_DIR, dir, ...rest)
         try {
           if (!statSync(file).isFile()) return next()
         } catch {
@@ -48,7 +62,9 @@ function serveTiles(): Plugin {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // GitHub Pages はリポジトリ名のサブパスで配る。
+  base: command === 'build' ? '/dem2tiles/' : '/',
   plugins: [serveTiles()],
   build: {
     // maplibre-contour が最上位 await を含むため ES2022 が必要
@@ -61,4 +77,4 @@ export default defineConfig({
     // 届かず、dev サーバが古い結果を返し続ける。ポーリングで検知する。
     watch: { usePolling: true, interval: 300 },
   },
-})
+}))
