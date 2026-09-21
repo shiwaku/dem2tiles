@@ -26,6 +26,14 @@ RESAMPLING="${RESAMPLING:-bilinear}"
 # Terrain-RGB encoding parameters
 RGBIFY_BASE="${RGBIFY_BASE:--10000}"
 RGBIFY_INTERVAL="${RGBIFY_INTERVAL:-0.1}"
+# Image format for the RGB encoded tile sets (mapbox, terrarium): png or webp.
+# WebP is what Mapterhorn serves, and it is about 40% smaller at identical
+# pixels -- rio-rgbify and rio-terrarium both hardcode lossless=True, so the
+# decoded elevations are bit for bit the same as the PNG ones.
+#
+# gsidem is deliberately not covered. Its reason to exist is compatibility with
+# the GSI elevation tiles (PNG), whose specification is 256x256 PNG.
+TILE_FORMAT="${TILE_FORMAT:-png}"
 # 数値PNGタイルの分解能。地理院標高タイル（PNG形式）の仕様は 0.01 m。
 GSIDEM_RESOLUTION="${GSIDEM_RESOLUTION:-0.01}"
 JOBS="${JOBS:-$(nproc)}"
@@ -82,6 +90,14 @@ if [ "$COMPRESS" = "DEFLATE" ]; then
     CREATE_OPTS+=(-co ZLEVEL=1)
     CALC_OPTS+=(--co=ZLEVEL=1)
 fi
+
+case "$TILE_FORMAT" in
+    png|webp) ;;
+    *)
+        echo "[dem2tiles] ERROR: TILE_FORMAT must be png or webp, got '$TILE_FORMAT'" >&2
+        exit 1
+        ;;
+esac
 
 want() {
     [[ " ${OUTPUTS//,/ } " == *" $1 "* ]]
@@ -232,7 +248,7 @@ fi
 # ---------------------------------------------------------------------------
 # Mapbox Terrain-RGB
 # ---------------------------------------------------------------------------
-MAPBOX_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL")
+MAPBOX_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
 
 if want mapbox; then
     if step_current mapbox "$MAPBOX_FP" "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"; then
@@ -241,13 +257,13 @@ if want mapbox; then
         # mb-util refuses to write into a directory that already exists, so the
         # previous attempt has to go before this one starts.
         step_begin mapbox "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"
-        log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM)"
+        log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding mapbox \
             --src "$FILLED" --dst mapbox.mbtiles --file-list "$FILE_LIST" \
-            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format png \
+            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --base-val "$RGBIFY_BASE" --interval "$RGBIFY_INTERVAL" \
             --workers "$JOBS"
-        mb-util --image_format=png mapbox.mbtiles "$OUTPUT_DIR/mapbox"
+        mb-util --image_format="$TILE_FORMAT" mapbox.mbtiles "$OUTPUT_DIR/mapbox"
         step_done mapbox "$MAPBOX_FP"
     fi
 fi
@@ -255,19 +271,19 @@ fi
 # ---------------------------------------------------------------------------
 # Terrarium
 # ---------------------------------------------------------------------------
-TERRARIUM_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM")
+TERRARIUM_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
 
 if want terrarium; then
     if step_current terrarium "$TERRARIUM_FP" "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"; then
         log "terrarium tiles are up to date, skipping"
     else
         step_begin terrarium "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"
-        log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM)"
+        log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding terrarium \
             --src "$FILLED" --dst terrarium.mbtiles --file-list "$FILE_LIST" \
-            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format png \
+            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --workers "$JOBS"
-        mb-util --image_format=png terrarium.mbtiles "$OUTPUT_DIR/terrarium"
+        mb-util --image_format="$TILE_FORMAT" terrarium.mbtiles "$OUTPUT_DIR/terrarium"
         step_done terrarium "$TERRARIUM_FP"
     fi
 fi

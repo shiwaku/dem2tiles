@@ -9,12 +9,14 @@ DEM の GeoTIFF を標高タイルに変換する。
 
 | 出力 | 形式 | タイルサイズ | 出力先 |
 | --- | --- | --- | --- |
-| Mapbox Terrain-RGB | PNG（`mbtiles` と展開済みディレクトリ） | 512 | `output/mapbox` |
-| Terrarium | PNG（`mbtiles` と展開済みディレクトリ） | 512 | `output/terrarium` |
+| Mapbox Terrain-RGB | PNG / WebP（`mbtiles` と展開済みディレクトリ） | 512 | `output/mapbox` |
+| Terrarium | PNG / WebP（`mbtiles` と展開済みディレクトリ） | 512 | `output/terrarium` |
 | 地理院標高タイル | PNG（数値PNGタイル） | 256 | `output/gsidem` |
 
 タイルサイズが揃っていないのは意図的。地理院標高タイル（PNG形式）の仕様が
 256x256 のため。
+
+RGB 系2種の形式は `TILE_FORMAT` で選ぶ（既定 `png`、後述）。
 
 ## 使い方
 
@@ -86,6 +88,7 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 | `RESAMPLING` | `bilinear` | 再投影時のリサンプリング方法 |
 | `RGBIFY_BASE` | `-10000` | Terrain-RGB の基準値 |
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
+| `TILE_FORMAT` | `png` | Terrain-RGB / Terrarium の画像形式（`png` / `webp`）。gsidem は常に PNG |
 | `GSIDEM_RESOLUTION` | `0.01` | 数値PNGタイルの分解能 [m]。地理院仕様は 0.01 |
 | `JOBS` | `nproc` | 並列数 |
 | `BLOCKSIZE` | `512` | マージ後 GeoTIFF の内部ブロックサイズ |
@@ -228,6 +231,35 @@ $ docker run ... -e RGB_MAX_ZOOM=16 dem2tiles
 入力の指紋はファイルパスの一覧だけを見ている。ラスタの中身までハッシュすると変換より
 高くつくため。**ファイル名を変えずに中身を差し替えた場合は検出できない**ので、そのときは
 `FORCE=1` を使う。
+
+## タイルの画像形式（PNG / WebP）
+
+`TILE_FORMAT=webp` にすると、Terrain-RGB と Terrarium を WebP で出力する。
+[Mapterhorn](https://github.com/mapterhorn/mapterhorn) が terrain タイルの配信形式に
+採用しているのがこれで、dem2tiles の既存出力とはエンコーディング（terrarium）も
+タイルサイズ（512）も既に同じなので、違うのは形式だけになる。
+
+```bash
+docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=webp \
+  -v /path/to/dem:/input -v $(pwd)/output:/output dem2tiles
+```
+
+同一データ（grid2geotiff の 0.5m グリッド 4図郭、z5-18、83タイル）での実測。
+
+| | PNG | WebP | 削減 |
+| --- | --- | --- | --- |
+| `mapbox.mbtiles` | 1,462,272 B | 831,488 B | 43% |
+| `terrarium.mbtiles` | 5,844,992 B | 3,411,968 B | 42% |
+
+**標高値は変わらない。** 83タイル全てで PNG と WebP の復号画素が完全一致した。
+`rio-rgbify` / `rio-terrarium` はどちらも `im.save(f, format="webp", lossless=True)` と
+ハードコードされていて、非可逆圧縮になる経路がない。
+
+既定を `png` のままにしてあるのは、切り替えると配信済みタイルの URL の拡張子が
+変わるため。新規に作るなら `webp` でよい。
+
+`gsidem` はこの設定の対象外で、常に PNG を出す。地理院標高タイル（PNG形式）の仕様が
+256x256 の PNG であり、地理院互換であることがこの出力の存在理由のため。
 
 ## 地理院標高タイル（PNG形式）について
 
