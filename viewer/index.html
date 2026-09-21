@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>dem2tiles viewer</title>
+  <meta name="description" content="dem2tiles が出力する Terrarium / Mapbox Terrain-RGB / 数値PNG の3種類の標高タイルを切り替え、段彩・陰影起伏・等高線・3D地形で確認するビューワ" />
+  <meta name="theme-color" content="#2a78d6" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <section id="panel" class="panel" aria-label="コントロールパネル">
+    <header class="panel-head">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">⛰</span>
+        <h1>dem2tiles viewer</h1>
+      </div>
+      <div class="head-actions">
+        <button id="theme-btn" class="icon-btn" type="button" title="テーマ切替" aria-label="テーマ切替"></button>
+        <button id="collapse-btn" class="icon-btn" type="button" title="パネル開閉" aria-label="パネル開閉"></button>
+      </div>
+    </header>
+
+    <div id="panel-body" class="panel-body">
+      <!-- ---- 標高タイルの切替 ---- -->
+      <div class="field">
+        <div class="field-head">
+          <span class="field-label">標高タイル</span>
+          <span id="dem-badge" class="count-badge">–</span>
+        </div>
+        <div id="dem-modes" class="seg seg-v" role="group" aria-label="標高タイルを選ぶ"></div>
+        <p id="dem-note" class="note"></p>
+      </div>
+
+      <!-- ---- 重ねるもの ---- -->
+      <div class="field">
+        <div class="field-head"><span class="field-label">表示</span></div>
+        <label class="toggle">
+          <input id="relief-on" type="checkbox" checked />
+          <span class="switch"></span><span class="t-label">段彩</span>
+        </label>
+        <div class="slider-row">
+          <label for="relief-opacity">不透明度</label>
+          <input id="relief-opacity" type="range" min="0.05" max="1" step="0.05" value="0.6" />
+          <span id="relief-opacity-val" class="op-val">60%</span>
+        </div>
+        <label class="toggle">
+          <input id="hillshade-on" type="checkbox" checked />
+          <span class="switch"></span><span class="t-label">陰影起伏</span>
+        </label>
+        <div class="slider-row">
+          <label for="hillshade-exag">強調</label>
+          <input id="hillshade-exag" type="range" min="0" max="1" step="0.05" value="0.35" />
+          <span id="hillshade-exag-val" class="op-val">0.35</span>
+        </div>
+        <label class="toggle">
+          <input id="contour-on" type="checkbox" />
+          <span class="switch"></span><span class="t-label">等高線</span>
+        </label>
+        <label class="toggle">
+          <input id="terrain-on" type="checkbox" />
+          <span class="switch"></span><span class="t-label">3D 地形</span>
+        </label>
+        <div class="slider-row">
+          <label for="terrain-exag">起伏</label>
+          <input id="terrain-exag" type="range" min="0.5" max="8" step="0.5" value="1" />
+          <span id="terrain-exag-val" class="op-val">1.0</span>
+        </div>
+      </div>
+
+      <!-- ---- 段彩のレンジと凡例 ---- -->
+      <div class="field">
+        <div class="field-head">
+          <span class="field-label">段彩のレンジ</span>
+          <span id="step-badge" class="count-badge">–</span>
+        </div>
+        <select id="relief-range" class="select" aria-label="段彩のレンジ"></select>
+        <div id="legend-bar" class="legend-bar"></div>
+        <div id="legend-ticks" class="legend-ticks"></div>
+      </div>
+
+      <!-- ---- 背景地図 ---- -->
+      <div class="field">
+        <div class="field-head"><span class="field-label">背景地図</span></div>
+        <div id="basemap-modes" class="seg" role="group" aria-label="背景地図を選ぶ"></div>
+      </div>
+
+      <div class="field readout">
+        <div>ズーム <b id="zoom-val">–</b></div>
+        <div id="tile-url" class="tile-url"></div>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
