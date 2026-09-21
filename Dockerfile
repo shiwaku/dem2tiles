@@ -60,6 +60,6 @@ RUN git clone https://github.com/smellman/gdal2NPtiles.git \
 # osgeo, while `rio` and `mb-util` resolve to the virtualenv.
 ENV PATH="$PATH:/opt/rio/bin"
 
-COPY probe.py docker_entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker_entrypoint.sh /usr/local/bin/probe.py
+COPY probe.py tile_driver.py docker_entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker_entrypoint.sh /usr/local/bin/probe.py /usr/local/bin/tile_driver.py
 ENTRYPOINT [ "/usr/local/bin/docker_entrypoint.sh" ]

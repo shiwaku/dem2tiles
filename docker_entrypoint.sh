@@ -36,6 +36,11 @@ MERGED="$OUTPUT_DIR/merged.tif"
 FILLED="$OUTPUT_DIR/merged_filled.tif"
 STATE_DIR="$OUTPUT_DIR/.state"
 
+# Bumped whenever a change here alters what a step produces. The fingerprints
+# cover settings and inputs, but nothing tells them the code moved, so without
+# this an old output would be accepted as current after an upgrade.
+PIPELINE_VERSION=2
+
 # Creation options for the merged rasters.
 #
 # TILED is not optional at this scale. A stripped GeoTIFF puts one row per
@@ -179,7 +184,7 @@ fi
 # ---------------------------------------------------------------------------
 # Merge into a single GeoTIFF, reprojecting if needed
 # ---------------------------------------------------------------------------
-MERGE_FP=$(fingerprint "$INPUT_FP" "$SRC_NODATA" "$DST_NODATA" "$TARGET_SRS" "$RESAMPLING" "$BLOCKSIZE" "$COMPRESS")
+MERGE_FP=$(fingerprint "$PIPELINE_VERSION" "$INPUT_FP" "$SRC_NODATA" "$DST_NODATA" "$TARGET_SRS" "$RESAMPLING" "$BLOCKSIZE" "$COMPRESS")
 
 if step_current merge "$MERGE_FP" "$MERGED"; then
     log "merge is up to date, skipping"
@@ -237,9 +242,11 @@ if want mapbox; then
         # previous attempt has to go before this one starts.
         step_begin mapbox "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"
         log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM)"
-        rio rgbify -b "$RGBIFY_BASE" -i "$RGBIFY_INTERVAL" --format png \
-            --max-z "$RGB_MAX_ZOOM" --min-z "$MIN_ZOOM" -j "$JOBS" \
-            "$FILLED" mapbox.mbtiles
+        /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding mapbox \
+            --src "$FILLED" --dst mapbox.mbtiles --file-list "$FILE_LIST" \
+            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format png \
+            --base-val "$RGBIFY_BASE" --interval "$RGBIFY_INTERVAL" \
+            --workers "$JOBS"
         mb-util --image_format=png mapbox.mbtiles "$OUTPUT_DIR/mapbox"
         step_done mapbox "$MAPBOX_FP"
     fi
@@ -256,9 +263,10 @@ if want terrarium; then
     else
         step_begin terrarium "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"
         log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM)"
-        rio terrarium --format png \
-            --max-z "$RGB_MAX_ZOOM" --min-z "$MIN_ZOOM" -j "$JOBS" \
-            "$FILLED" terrarium.mbtiles
+        /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding terrarium \
+            --src "$FILLED" --dst terrarium.mbtiles --file-list "$FILE_LIST" \
+            --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format png \
+            --workers "$JOBS"
         mb-util --image_format=png terrarium.mbtiles "$OUTPUT_DIR/terrarium"
         step_done terrarium "$TERRARIUM_FP"
     fi
