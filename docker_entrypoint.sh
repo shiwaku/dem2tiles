@@ -66,6 +66,13 @@ PIPELINE_VERSION=2
 #
 # DEFLATE at level 1 beats LZW here: a little larger, noticeably faster, and
 # the intermediate files are deleted once the tiles exist.
+#
+# NUM_THREADS spreads the compression over the cores. Without it GTiff
+# compresses on one thread, and that is what gdalwarp -multi and gdal_calc.py
+# end up waiting on: on a dense 179 Mpx sample the warp went from 17 s to
+# 11.5 s and the fill from 14 s to 6 s, with pixel-identical output.
+# (A larger gdalwarp -wm is deliberately not used: it changed no timings and
+# did change the values, because the warp approximates its transform per chunk.)
 BLOCKSIZE="${BLOCKSIZE:-512}"
 COMPRESS="${COMPRESS:-DEFLATE}"
 CREATE_OPTS=(
@@ -75,6 +82,7 @@ CREATE_OPTS=(
     -co "COMPRESS=$COMPRESS"
     -co SPARSE_OK=TRUE
     -co BIGTIFF=YES
+    -co "NUM_THREADS=$JOBS"
 )
 # gdal_calc.py spells the same thing differently.
 CALC_OPTS=(
@@ -84,6 +92,7 @@ CALC_OPTS=(
     --co="COMPRESS=$COMPRESS"
     --co=SPARSE_OK=TRUE
     --co=BIGTIFF=YES
+    --co="NUM_THREADS=$JOBS"
 )
 # ZLEVEL only exists for DEFLATE; GTiff warns about it under any other codec.
 if [ "$COMPRESS" = "DEFLATE" ]; then

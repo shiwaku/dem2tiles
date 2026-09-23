@@ -182,6 +182,18 @@ Reproject them to a common CRS first.
 圧縮は DEFLATE の level 1。LZW より少し大きいが速く、中間ファイルはタイルができれば
 消してよいもの。`BLOCKSIZE` と `COMPRESS` で変更できる。
 
+圧縮は `NUM_THREADS=$JOBS` で並列に行う。GTiff は既定では 1 スレッドで圧縮するので、
+`gdalwarp -multi` で再投影を並列にしても書き込みで詰まる。データの詰まった範囲
+（山梨の 400 図郭、出力 17,073 x 10,491 px）での実測:
+
+| | 変更前 | `NUM_THREADS` あり |
+| --- | --- | --- |
+| 再投影（`gdalwarp`） | 20 秒 | 14 秒 |
+| NoData 置換（`gdal_calc.py`） | 14 秒 | 9 秒 |
+
+出力は画素単位で同一。`gdalwarp -wm` を大きくするのは試したが、速くならず、
+再投影の近似がチャンク単位のため値が変わる（最大 0.66 m）ので採用していない。
+
 ## 中間ファイルと再実行
 
 - `output/input_files.txt` — 拾った入力の一覧
