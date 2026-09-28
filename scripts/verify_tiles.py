@@ -8,6 +8,8 @@
         --src /path/to/geotiffs
 
 --new 側の RGB 系（mapbox / terrarium）は --new-ext の拡張子で読む。gsidem は常に PNG。
+画素の比較は RGBA で行う。RGB 系の NoData は透過（アルファ 0）なので、標高の照合では
+透過の画素を「値なし」として数える。
 実行中の出力は読まないこと（mbtiles は開かないが、展開済みディレクトリが書きかけになる）。
 """
 import argparse
@@ -62,6 +64,8 @@ def compare(old_root, new_root, kind, old_ext, new_ext):
 
 def decode(kind, px):
     r, g, b = px[0], px[1], px[2]
+    if px[3] == 0:  # 透過（NoData）
+        return None
     if kind == "terrarium":
         return r * 256 + g + b / 256 - 32768
     if kind == "mapbox":

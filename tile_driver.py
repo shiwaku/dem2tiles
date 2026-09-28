@@ -4,13 +4,8 @@
 Both tilers enumerate every tile in the bounding box of their input and encode
 each one, whether or not any source pixel reaches it. That is fine for a dense
 DEM and ruinous for a sparse one: survey-line or coastal data can fill under a
-percent of its bounding box, and the rest becomes tiles of flat FILL_VALUE that
-cost time to make, space to keep and requests to serve.
-
-gdal2NPtiles does not have this problem, because it is handed a raster whose
-nodata is intact and skips tiles with nothing in them. The RGB encodings have
-no way to say "no value", so the fill has to happen first, and by the time the
-tiler sees the raster every pixel looks like data.
+percent of its bounding box, and the rest becomes tiles with nothing in them
+that cost time to make, space to keep and requests to serve.
 
 So the coverage is worked out here instead, from the footprints of the input
 GeoTIFFs, and the tilers are pointed at that set. Their own enumeration is
@@ -20,19 +15,28 @@ The footprints come from the mosaic VRT rather than from the GeoTIFFs. Opening
 every input costs about 12 ms a file on a Windows bind mount, 7.5 minutes for
 37,850 files, and the VRT already records where each one sits (#18).
 
-The tilers' per-tile worker is replaced as well, so that low zooms read an
-overview of the source instead of the full resolution raster (#17). Without
-it, each tile that covers the whole extent reads every pixel of it, one worker
-per tile: on a 30 Gpx raster z5-z7 had not produced a single tile after 50
-minutes.
+The tilers' per-tile worker is replaced as well, for two reasons.
+
+- Nodata. The RGB encodings have no value that means "no data", so the tilers
+  paint every pixel as some elevation. The worker here writes RGBA instead and
+  makes nodata fully transparent, as the Forestry Agency's map tile manual
+  does for Terrain-RGB. Under the transparent pixels the RGB still holds
+  DST_NODATA, encoded, for clients that ignore alpha.
+- Low zooms read an overview of the source instead of the full resolution
+  raster (#17). Without it, each tile that covers the whole extent reads every
+  pixel of it, one worker per tile: on a 30 Gpx raster z5-z7 had not produced
+  a single tile after 50 minutes.
 """
 import argparse
+import sqlite3
 import sys
+from io import BytesIO
 import xml.etree.ElementTree as ET
 
 import mercantile
 import numpy as np
 import rasterio
+from PIL import Image
 from rasterio import transform
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
@@ -82,17 +86,22 @@ def coverage_tiles(vrt_path, min_z, max_z):
 
 
 # ---------------------------------------------------------------------------
-# Overview aware tile worker
+# Tile worker: nodata as transparency, overviews for low zooms
 #
-# Mirrors _tile_worker in rio-rgbify / rio-terrarium, which is identical in
-# both apart from the encoder call. The only change is which dataset the tile
-# is warped from. rasterio.warp.reproject does not pick an overview by itself
-# the way `gdalwarp -ovr AUTO` does, so the level is chosen here: the coarsest
-# overview that is still at least as fine as the tile. Zooms at or beyond the
-# source resolution get no overview and take exactly the old code path, so
-# their tiles are byte for byte what they were.
+# Follows _tile_worker in rio-rgbify / rio-terrarium, which is identical in
+# both apart from the encoder call, with three changes:
+#
+# - The warp keeps the source nodata, and the tile gets an alpha band that is
+#   0 wherever no valid pixel reached. Bilinear interpolation then uses the
+#   valid neighbours only, so edges do not blend with a filled-in value.
+# - The tile is encoded as RGBA here rather than by the tilers' RGB writers.
+# - rasterio.warp.reproject does not pick an overview by itself the way
+#   `gdalwarp -ovr AUTO` does, so the level is chosen here: the coarsest
+#   overview that is still at least as fine as the tile. Zooms at or beyond
+#   the source resolution read the full raster.
 # ---------------------------------------------------------------------------
 _mbtiler = None
+_image_format = "png"
 _datasets = {}
 _factors = []
 
@@ -126,6 +135,22 @@ def _pick_level(bounds):
     return level
 
 
+def _encode(rgba, image_format):
+    """RGBA (4, 512, 512) uint8 -> PNG or lossless WebP bytes.
+
+    exact=True keeps the RGB under fully transparent pixels. libwebp otherwise
+    rewrites it to whatever compresses best, and a client that ignores alpha
+    would then decode an arbitrary elevation there instead of DST_NODATA.
+    """
+    im = Image.fromarray(np.moveaxis(rgba, 0, -1), "RGBA")
+    with BytesIO() as f:
+        if image_format == "webp":
+            im.save(f, format="webp", lossless=True, exact=True)
+        else:
+            im.save(f, format="png")
+        return f.getvalue()
+
+
 def overview_tile_worker(tile):
     x, y, z = tile
     bounds = [
@@ -139,28 +164,43 @@ def overview_tile_worker(tile):
     toaffine = transform.from_bounds(*bounds + [512, 512])
 
     src = _open_level(_pick_level(bounds))
-    out = np.empty((512, 512), dtype=src.meta["dtype"])
+    nodata = src.nodata
+    out = np.full((512, 512), nodata if nodata is not None else 0,
+                  dtype=src.meta["dtype"])
+    # The source keeps its nodata, so the warp leaves nodata where no valid
+    # pixel reaches and interpolates from the valid ones only. Edges no longer
+    # blend with a filled-in value.
     reproject(
         rasterio.band(src, 1),
         out,
         dst_transform=toaffine,
         dst_crs="EPSG:3857",
+        dst_nodata=nodata,
         resampling=Resampling.bilinear,
     )
+    if nodata is None:
+        alpha = np.full((512, 512), 255, dtype=np.uint8)
+    else:
+        alpha = np.where(out == nodata, 0, 255).astype(np.uint8)
+        # The footprints are the inputs' bounding boxes, so some tiles in the
+        # coverage hold no data at all. run() inserts whatever comes back; an
+        # empty blob marks the tile for removal once it is done.
+        if not alpha.any():
+            return tile, b""
 
     g = _mbtiler.global_args
     if "base_val" in g:  # rio-rgbify
-        out = _mbtiler.data_to_rgb(out, g["base_val"], g["interval"], g["round_digits"])
+        rgb = _mbtiler.data_to_rgb(out, g["base_val"], g["interval"], g["round_digits"])
     else:  # rio-terrarium
-        out = _mbtiler.data_to_rgb(out)
-    return tile, g["writer_func"](out, g["kwargs"].copy(), toaffine)
+        rgb = _mbtiler.data_to_rgb(out)
+    return tile, _encode(np.concatenate([rgb, alpha[None]]), _image_format)
 
 
 def main():
-    global _mbtiler
+    global _mbtiler, _image_format
     ap = argparse.ArgumentParser()
     ap.add_argument("--encoding", choices=("mapbox", "terrarium"), required=True)
-    ap.add_argument("--src", required=True, help="raster to encode (nodata already filled)")
+    ap.add_argument("--src", required=True, help="raster to encode, with its nodata")
     ap.add_argument("--dst", required=True, help="mbtiles to write")
     ap.add_argument("--vrt", required=True, help="mosaic VRT of the inputs, for the footprint")
     ap.add_argument("--min-z", type=int, required=True)
@@ -205,6 +245,7 @@ def main():
     # each worker; the replacement worker reads it from there. Workers are
     # forked, so the module reference set here is inherited.
     _mbtiler = mbtiler
+    _image_format = args.format
     tiler.run_function = overview_tile_worker
     with rasterio.open(args.src) as src:
         levels = src.overviews(1)
@@ -215,6 +256,12 @@ def main():
 
     with tiler as t:
         t.run(args.workers)
+
+    conn = sqlite3.connect(args.dst)
+    empty = conn.execute("DELETE FROM tiles WHERE length(tile_data) = 0").rowcount
+    conn.commit()
+    conn.close()
+    print(f"tile_driver: dropped {empty} tile(s) with no data", flush=True)
 
 
 if __name__ == "__main__":

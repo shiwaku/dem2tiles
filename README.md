@@ -83,14 +83,13 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 | `GSIDEM_MAX_ZOOM` | `auto` | 地理院標高タイルの最大ズーム |
 | `SRC_NODATA` | *(なし)* | 入力の NoData 値を上書き。空なら GeoTIFF 埋め込み値を使う |
 | `DST_NODATA` | `-9999` | マージ後 GeoTIFF と地理院標高タイルの NoData 値 |
-| `FILL_VALUE` | `0` | RGB 符号化前に NoData を置き換える値 |
 | `TARGET_SRS` | `EPSG:4326` | 入力が別の座標系なら再投影する。空なら入力のまま。`EPSG:xxxx` 形式で指定する（後述） |
 | `RESAMPLING` | `bilinear` | 再投影時のリサンプリング方法 |
 | `RGBIFY_BASE` | `-10000` | Terrain-RGB の基準値 |
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
 | `TILE_FORMAT` | `webp` | Terrain-RGB / Terrarium の画像形式（`png` / `webp`）。gsidem は常に PNG |
 | `GSIDEM_RESOLUTION` | `0.01` | 数値PNGタイルの分解能 [m]。地理院仕様は 0.01 |
-| `JOBS` | `nproc` | 並列数 |
+| `JOBS` | `nproc` の半分 | 並列数。全 CPU を使うと Docker を動かしている PC が重くなるため半分にしてある |
 | `BLOCKSIZE` | `512` | マージ後 GeoTIFF の内部ブロックサイズ |
 | `COMPRESS` | `DEFLATE` | マージ後 GeoTIFF の圧縮方式 |
 | `FORCE` | *(なし)* | 空でなければ既存の出力を無視して全部作り直す |
@@ -129,7 +128,7 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 ## データのあるタイルだけ作る
 
 `rio rgbify` と `rio terrarium` は入力の外接矩形に含まれるタイルを機械的に列挙し、
-データが届かないタイルも `FILL_VALUE` 一色として符号化する。密な DEM なら問題ないが、
+データが届かないタイルも符号化する。密な DEM なら問題ないが、
 測線状・飛び地状のデータでは大半が中身のないタイルになる。
 
 `tile_driver.py` が入力図郭のフットプリントから、データが届くタイルだけを列挙して
@@ -146,6 +145,30 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 `gdal2NPtiles` は nodata を保持した `merged.tif` を読むので、もともとデータのない
 タイルを書き出さない。絞り込みは RGB 系にだけ要る。
 
+## NoData の扱い（RGB 系は透過）
+
+Terrain-RGB と Terrarium には「値なし」を表す値がない。そこで RGB 系のタイルは
+**RGBA で出力し、NoData の画素を透過（アルファ 0）にする**。林野庁
+[マップタイル作成マニュアル](https://forestgeo.info/%e3%83%9e%e3%83%83%e3%83%97%e3%82%bf%e3%82%a4%e3%83%ab%e4%bd%9c%e6%88%90%e3%83%9e%e3%83%8b%e3%83%a5%e3%82%a2%e3%83%ab%ef%bc%88%e7%ac%ac1-0%e7%89%88%ef%bc%89/)
+の Terrain-RGB と同じ扱いで、QGIS などでは NoData がそのまま透けて見える。
+
+- 透過の画素の RGB には `DST_NODATA`（既定 -9999）を符号化した値を入れる。Terrain-RGB
+  なら (0, 0, 10) で、マニュアルが `-vrtnodata "0 0 10"` で透過にしている値と同じ。
+  アルファを見ないソフトでも -9999 として読める
+- マニュアルは RGB に変換してから最近傍で縮める（RGB を補間すると標高が壊れるため）。
+  dem2tiles は標高のまま双線形で縮め、NoData を除いて補間してから RGB にするので、
+  補間で値が壊れず、低ズームもなめらかになる
+- データのある画素が 1 つもないタイルは書き出さない
+- 地理院標高タイル（数値PNG）は仕様上の NoData 値（RGB 128, 0, 0）を持つので、従来どおり
+
+ブラウザは透過の画素の RGB を 0 に潰すことがある。MapLibre でそうなった場合、NoData は
+Terrain-RGB で -10,000 m、Terrarium で -32,768 m として読まれる。マニュアルの方式で作った
+タイルでも同じことが起きる。
+
+以前の版は NoData を 0 m で埋めてから符号化していた（`FILL_VALUE`）。NoData が着色されるうえ、
+データの縁で 0 m が補間に混ざって値がずれていた（静岡で最大 2.3 m）。透過にしてからは
+縁の値も元の GeoTIFF と合う（最大 1.0 m、数値PNG と同程度）。
+
 ## 低ズームのタイルとオーバービュー
 
 `rio rgbify` と `rio terrarium` は、タイルを 1 枚作るたびに元のラスタから 512x512 に
@@ -153,12 +176,12 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 原寸で読み、しかも 1 枚を 1 ワーカーが担当するので並列にならない。山梨県全域
 （190,850 x 160,374 px）では、z5〜z7 のタイルが 50 分経っても 1 枚もできなかった（#17）。
 
-そこで fill の後に `gdaladdo` で `merged_filled.tif.ovr`（外部オーバービュー、`average`）を
-作り、`tile_driver.py` がタイルの解像度に合う段を選んで読む。元の解像度に近いズーム
+そこで `gdaladdo` で `merged_rgb.vrt.ovr`（`merged.tif` を指す VRT の外部オーバービュー、
+`average`）を作り、`tile_driver.py` がタイルの解像度に合う段を選んで読む。元の解像度に近いズーム
 （静岡・山梨の 0.5 m なら z16〜17）はオーバービューを使わず、**出力は変更前とバイト単位で
 同じ**。それより低いズームは縮小のしかたが変わるので値が少し変わる。
 
-静岡県の航空レーザ測深（1164 図郭、`merged_filled.tif` 222,948 x 101,654 px）での実測:
+静岡県の航空レーザ測深（1164 図郭、222,948 x 101,654 px）での実測（NoData を 0 m で埋めていた版、並列 14）:
 
 | | 変更前 | 変更後 |
 | --- | --- | --- |
@@ -167,9 +190,11 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 | terrarium（z5〜17） | 298 秒 | **77 秒** |
 
 z5〜15 の値の変化（山梨の 400 図郭、terrarium）は、データの縁から離れた場所で中央値
-0.008 m、99.9% が 0.27 m 以内。5 m を超えて変わった画素の 97.6% は、NoData を 0 で埋めた
-画素から 3 px 以内にある。縁の崖を平均で縮めるか、元の解像度から双線形で縮めるかの
-違いで、どちらも 0 埋めの影響を受けた値である。
+0.008 m、99.9% が 0.27 m 以内。
+
+オーバービューを `merged.tif` に直接付けないのは、GDAL が縮小して読むときに自動で
+オーバービューを使うため。地理院標高タイルを作る `gdal2NPtiles` は `merged.tif` を読むので、
+そちらの出力が変わりうる。
 
 ## 入力の検証
 
@@ -229,10 +254,9 @@ Inputs in another CRS have to be reprojected to a common CRS first.
 - `output/merged.vrt` — 入力をまとめた仮想ラスタ。最初に一度だけ作り、入力の点検・
   マージ・タイルの範囲の計算がこれを使う。入力ファイルを全部開くのはこの 1 回だけ
 - `output/merged.tif` — 再投影済み。NoData は保持。地理院標高タイルの元
-- `output/merged_filled.tif` — NoData を `FILL_VALUE` に置換。RGB 系タイルの元。
-  `OUTPUTS` に `mapbox` も `terrarium` も無いときは作られない
-- `output/merged_filled.tif.ovr` — `merged_filled.tif` のオーバービュー。低ズームの
-  RGB 系タイルが読む（後述）
+- `output/merged_rgb.vrt`, `output/merged_rgb.vrt.ovr` — `merged.tif` を指す VRT と
+  そのオーバービュー。RGB 系タイルの元。`OUTPUTS` に `mapbox` も `terrarium` も無いときは
+  作られない
 - `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles
 - `output/mapbox`, `output/terrarium`, `output/gsidem` — 展開済みタイル
 - `output/.state/` — 各ステップの完了マーカー
@@ -260,7 +284,6 @@ Inputs in another CRS have to be reprojected to a common CRS first.
 $ docker run ... -e RGB_MAX_ZOOM=16 dem2tiles
 [dem2tiles] mosaic VRT is up to date, skipping
 [dem2tiles] merge is up to date, skipping
-[dem2tiles] nodata fill is up to date, skipping
 [dem2tiles] overviews are up to date, skipping
 [dem2tiles] building mapbox tiles (z5-16)
 [dem2tiles] building terrarium tiles (z5-16)
@@ -338,9 +361,7 @@ docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=png \
 
 ## 補足
 
-- Debian の `gdal_calc.py` は `--NoDataValue=None` が効かない。
-- 地理院標高タイルは `merged.tif`、RGB 系タイルは `merged_filled.tif` から作る。
-  Terrain-RGB と Terrarium には「値なし」を表す方法がないため。
+- 以前の版が作っていた `merged_filled.tif` は、今の版で実行すると自動で消える。
 
 ## クレジット
 

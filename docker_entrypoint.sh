@@ -18,8 +18,6 @@ GSIDEM_MAX_ZOOM="${GSIDEM_MAX_ZOOM:-auto}"
 # carry a nodata value themselves; leave empty to use the embedded one.
 SRC_NODATA="${SRC_NODATA:-}"
 DST_NODATA="${DST_NODATA:--9999}"
-# Value that nodata is replaced with before building the RGB encoded tiles.
-FILL_VALUE="${FILL_VALUE:-0}"
 # Reproject to this CRS when the input is in something else. Empty = keep as is.
 TARGET_SRS="${TARGET_SRS:-EPSG:4326}"
 RESAMPLING="${RESAMPLING:-bilinear}"
@@ -36,12 +34,14 @@ RGBIFY_INTERVAL="${RGBIFY_INTERVAL:-0.1}"
 TILE_FORMAT="${TILE_FORMAT:-webp}"
 # 数値PNGタイルの分解能。地理院標高タイル（PNG形式）の仕様は 0.01 m。
 GSIDEM_RESOLUTION="${GSIDEM_RESOLUTION:-0.01}"
-JOBS="${JOBS:-$(nproc)}"
+# Half the CPUs by default. Every heavy step (the warp, GeoTIFF compression,
+# the overviews, both tilers) runs this wide for an hour or more on a large
+# extent, and using all of them left the machine running Docker unusable.
+JOBS="${JOBS:-$(( $(nproc) / 2 > 0 ? $(nproc) / 2 : 1 ))}"
 # Rebuild everything, ignoring what is already in the output directory.
 FORCE="${FORCE:-}"
 
 MERGED="$OUTPUT_DIR/merged.tif"
-FILLED="$OUTPUT_DIR/merged_filled.tif"
 STATE_DIR="$OUTPUT_DIR/.state"
 
 # Bumped whenever a change here alters what a step produces. The fingerprints
@@ -84,20 +84,9 @@ CREATE_OPTS=(
     -co BIGTIFF=YES
     -co "NUM_THREADS=$JOBS"
 )
-# gdal_calc.py spells the same thing differently.
-CALC_OPTS=(
-    --co=TILED=YES
-    --co="BLOCKXSIZE=$BLOCKSIZE"
-    --co="BLOCKYSIZE=$BLOCKSIZE"
-    --co="COMPRESS=$COMPRESS"
-    --co=SPARSE_OK=TRUE
-    --co=BIGTIFF=YES
-    --co="NUM_THREADS=$JOBS"
-)
 # ZLEVEL only exists for DEFLATE; GTiff warns about it under any other codec.
 if [ "$COMPRESS" = "DEFLATE" ]; then
     CREATE_OPTS+=(-co ZLEVEL=1)
-    CALC_OPTS+=(--co=ZLEVEL=1)
 fi
 
 case "$TILE_FORMAT" in
@@ -259,51 +248,48 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Replace nodata with FILL_VALUE for the RGB encoded tile sets
-# ---------------------------------------------------------------------------
-FILL_FP=$(fingerprint "$MERGE_FP" "$DST_NODATA" "$FILL_VALUE")
-
-if want mapbox || want terrarium; then
-    if step_current fill "$FILL_FP" "$FILLED"; then
-        log "nodata fill is up to date, skipping"
-    else
-        # The overviews are a sidecar file. Left behind, GDAL would attach the
-        # old ones to the new raster.
-        step_begin fill "$FILLED" "$FILLED.ovr"
-        log "replacing nodata ($DST_NODATA) with $FILL_VALUE"
-        # Debian's gdal_calc.py does not accept --NoDataValue=None.
-        gdal_calc.py -A "$MERGED" --outfile="$FILLED" \
-            --calc="where(A==$DST_NODATA, $FILL_VALUE, A)" \
-            --NoDataValue=None --type=Float32 \
-            "${CALC_OPTS[@]}"
-        step_done fill "$FILL_FP"
-    fi
-fi
-
-# ---------------------------------------------------------------------------
-# Overviews of the filled raster, for the low zoom RGB tiles
+# Overviews for the low zoom RGB tiles
 #
 # rio-rgbify and rio-terrarium warp every tile straight from the source. With
 # no overviews, a tile that covers the whole extent reads all of it at full
 # resolution, one worker per tile: on a 190,850 x 160,374 px raster z5-z7 had
 # not produced a tile after 50 minutes (#17). tile_driver.py picks the level
 # that matches each tile; tiles at or beyond the source resolution still read
-# the full raster and do not change.
+# the full raster.
 #
-# External (-ro) so the filled raster itself, and the fill step, stay as they
-# are. Levels are left to gdaladdo, which halves until the raster fits 256 px.
-# average rather than bilinear: each overview pixel is the mean of what it
-# covers, which is what a coarser elevation grid should hold.
+# The RGB tiles read merged.tif itself, nodata and all, so that nodata becomes
+# transparent in the tiles instead of being painted as some elevation. The
+# overviews hang off a VRT of merged.tif rather than off merged.tif, because
+# GDAL uses a raster's overviews for any downsampled read, and gdal2NPtiles
+# reads merged.tif: attaching them there could change the gsidem tiles.
+#
+# Levels are left to gdaladdo, which halves until the raster fits 256 px.
+# average rather than bilinear: each overview pixel is the mean of the valid
+# pixels it covers, which is what a coarser elevation grid should hold.
 # ---------------------------------------------------------------------------
-OVERVIEW_FP=$(fingerprint "$FILL_FP" average "$BLOCKSIZE" "$COMPRESS")
+RGB_SRC="$OUTPUT_DIR/merged_rgb.vrt"
+OVERVIEW_FP=$(fingerprint "$MERGE_FP" average "$BLOCKSIZE" "$COMPRESS")
+
+# Left over from before the RGB tiles kept their nodata: merged_filled.tif,
+# the same size as merged.tif, is no longer read by anything.
+if [ -e "$OUTPUT_DIR/merged_filled.tif" ] || [ -e "$STATE_DIR/fill" ]; then
+    log "removing merged_filled.tif, which this version no longer uses"
+    rm -f "$OUTPUT_DIR/merged_filled.tif" "$OUTPUT_DIR/merged_filled.tif.ovr" "$STATE_DIR/fill"
+fi
 
 if want mapbox || want terrarium; then
-    if step_current overview "$OVERVIEW_FP" "$FILLED.ovr"; then
+    if step_current overview "$OVERVIEW_FP" "$RGB_SRC" "$RGB_SRC.ovr"; then
         log "overviews are up to date, skipping"
     else
-        step_begin overview "$FILLED.ovr"
-        log "building overviews of the filled raster"
-        gdaladdo -ro -r average             --config COMPRESS_OVERVIEW "$COMPRESS"             --config BIGTIFF_OVERVIEW YES             --config GDAL_TIFF_OVR_BLOCKSIZE "$BLOCKSIZE"             --config GDAL_NUM_THREADS "$JOBS"             "$FILLED"
+        step_begin overview "$RGB_SRC" "$RGB_SRC.ovr"
+        log "building overviews for the RGB tiles"
+        gdal_translate -q -of VRT "$MERGED" "$RGB_SRC"
+        gdaladdo -ro -r average \
+            --config COMPRESS_OVERVIEW "$COMPRESS" \
+            --config BIGTIFF_OVERVIEW YES \
+            --config GDAL_TIFF_OVR_BLOCKSIZE "$BLOCKSIZE" \
+            --config GDAL_NUM_THREADS "$JOBS" \
+            "$RGB_SRC"
         step_done overview "$OVERVIEW_FP"
     fi
 fi
@@ -311,7 +297,7 @@ fi
 # ---------------------------------------------------------------------------
 # Mapbox Terrain-RGB
 # ---------------------------------------------------------------------------
-MAPBOX_FP=$(fingerprint "$OVERVIEW_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
+MAPBOX_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
 
 if want mapbox; then
     if step_current mapbox "$MAPBOX_FP" "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"; then
@@ -322,7 +308,7 @@ if want mapbox; then
         step_begin mapbox "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"
         log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding mapbox \
-            --src "$FILLED" --dst mapbox.mbtiles --vrt "$VRT" \
+            --src "$RGB_SRC" --dst mapbox.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --base-val "$RGBIFY_BASE" --interval "$RGBIFY_INTERVAL" \
             --workers "$JOBS"
@@ -334,7 +320,7 @@ fi
 # ---------------------------------------------------------------------------
 # Terrarium
 # ---------------------------------------------------------------------------
-TERRARIUM_FP=$(fingerprint "$OVERVIEW_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
+TERRARIUM_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
 
 if want terrarium; then
     if step_current terrarium "$TERRARIUM_FP" "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"; then
@@ -343,7 +329,7 @@ if want terrarium; then
         step_begin terrarium "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"
         log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding terrarium \
-            --src "$FILLED" --dst terrarium.mbtiles --vrt "$VRT" \
+            --src "$RGB_SRC" --dst terrarium.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --workers "$JOBS"
         mb-util --image_format="$TILE_FORMAT" terrarium.mbtiles "$OUTPUT_DIR/terrarium"
