@@ -33,7 +33,7 @@ RGBIFY_INTERVAL="${RGBIFY_INTERVAL:-0.1}"
 #
 # gsidem is deliberately not covered. Its reason to exist is compatibility with
 # the GSI elevation tiles (PNG), whose specification is 256x256 PNG.
-TILE_FORMAT="${TILE_FORMAT:-png}"
+TILE_FORMAT="${TILE_FORMAT:-webp}"
 # 数値PNGタイルの分解能。地理院標高タイル（PNG形式）の仕様は 0.01 m。
 GSIDEM_RESOLUTION="${GSIDEM_RESOLUTION:-0.01}"
 JOBS="${JOBS:-$(nproc)}"

@@ -16,7 +16,7 @@ DEM の GeoTIFF を標高タイルに変換する。
 タイルサイズが揃っていないのは意図的。地理院標高タイル（PNG形式）の仕様が
 256x256 のため。
 
-RGB 系2種の形式は `TILE_FORMAT` で選ぶ（既定 `png`、後述）。
+RGB 系2種の形式は `TILE_FORMAT` で選ぶ（既定 `webp`、後述）。
 
 ## 使い方
 
@@ -88,7 +88,7 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 | `RESAMPLING` | `bilinear` | 再投影時のリサンプリング方法 |
 | `RGBIFY_BASE` | `-10000` | Terrain-RGB の基準値 |
 | `RGBIFY_INTERVAL` | `0.1` | Terrain-RGB の刻み |
-| `TILE_FORMAT` | `png` | Terrain-RGB / Terrarium の画像形式（`png` / `webp`）。gsidem は常に PNG |
+| `TILE_FORMAT` | `webp` | Terrain-RGB / Terrarium の画像形式（`png` / `webp`）。gsidem は常に PNG |
 | `GSIDEM_RESOLUTION` | `0.01` | 数値PNGタイルの分解能 [m]。地理院仕様は 0.01 |
 | `JOBS` | `nproc` | 並列数 |
 | `BLOCKSIZE` | `512` | マージ後 GeoTIFF の内部ブロックサイズ |
@@ -246,13 +246,15 @@ $ docker run ... -e RGB_MAX_ZOOM=16 dem2tiles
 
 ## タイルの画像形式（PNG / WebP）
 
-`TILE_FORMAT=webp` にすると、Terrain-RGB と Terrarium を WebP で出力する。
+既定では Terrain-RGB と Terrarium を WebP で出力する。
 [Mapterhorn](https://github.com/mapterhorn/mapterhorn) が terrain タイルの配信形式に
 採用しているのがこれで、dem2tiles の既存出力とはエンコーディング（terrarium）も
 タイルサイズ（512）も既に同じなので、違うのは形式だけになる。
 
+PNG で出したいときは `TILE_FORMAT=png` を指定する。
+
 ```bash
-docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=webp \
+docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=png \
   -v /path/to/dem:/input -v $(pwd)/output:/output dem2tiles
 ```
 
@@ -267,8 +269,8 @@ docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=webp \
 `rio-rgbify` / `rio-terrarium` はどちらも `im.save(f, format="webp", lossless=True)` と
 ハードコードされていて、非可逆圧縮になる経路がない。
 
-既定を `png` のままにしてあるのは、切り替えると配信済みタイルの URL の拡張子が
-変わるため。新規に作るなら `webp` でよい。
+配信済みの PNG タイルを作り直すときは `TILE_FORMAT=png` を指定する。形式を変えると
+タイル URL の拡張子（`.png` / `.webp`）が変わり、参照側の設定も直す必要があるため。
 
 `gsidem` はこの設定の対象外で、常に PNG を出す。地理院標高タイル（PNG形式）の仕様が
 256x256 の PNG であり、地理院互換であることがこの出力の存在理由のため。
