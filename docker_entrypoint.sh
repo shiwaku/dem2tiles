@@ -184,13 +184,40 @@ log "found $INPUT_COUNT GeoTIFF(s) under $INPUT_DIR"
 INPUT_FP=$(sha256sum "$FILE_LIST" | cut -d' ' -f1)
 
 # ---------------------------------------------------------------------------
+# Mosaic VRT of the inputs
+#
+# Built once, up front, and reused by everything that needs to know about the
+# inputs: probe.py validates against it, gdalwarp reads it, and tile_driver.py
+# takes the footprints from it. Each of those used to open every input itself,
+# at about 12 ms a file on a Windows bind mount -- 7 to 12 minutes apiece for
+# 37,850 files (#18). This way a run opens the inputs once, and a rerun on the
+# same inputs not at all.
+# ---------------------------------------------------------------------------
+VRT="$OUTPUT_DIR/merged.vrt"
+VRT_FP=$(fingerprint "$PIPELINE_VERSION" "$INPUT_FP" "$SRC_NODATA")
+
+if step_current vrt "$VRT_FP" "$VRT"; then
+    log "mosaic VRT is up to date, skipping"
+else
+    step_begin vrt "$VRT"
+    log "building the mosaic VRT"
+    VRT_OPTS=()
+    [ -n "$SRC_NODATA" ] && VRT_OPTS+=(-srcnodata "$SRC_NODATA")
+    gdalbuildvrt "${VRT_OPTS[@]}" -input_file_list "$FILE_LIST" "$VRT"
+    # Marked done only once probe.py has accepted it below. A VRT that left
+    # inputs out must not be reused after the inputs are fixed in place.
+    VRT_BUILT=1
+fi
+
+# ---------------------------------------------------------------------------
 # Validate the inputs and derive SRC_SRS / NATIVE_ZOOM
 # ---------------------------------------------------------------------------
 # Assign first: `eval "$(cmd)"` alone would swallow a non-zero exit from cmd.
 # probe.py needs rasterio, which lives in the virtualenv, not in the
 # system interpreter that carries osgeo.
-PROBE_OUT="$(/opt/rio/bin/python /usr/local/bin/probe.py "$FILE_LIST")"
+PROBE_OUT="$(/opt/rio/bin/python /usr/local/bin/probe.py "$FILE_LIST" "$VRT")"
 eval "$PROBE_OUT"
+[ -z "${VRT_BUILT:-}" ] || step_done vrt "$VRT_FP"
 log "source CRS: ${SRC_SRS:-unknown}, pixel size: ${NATIVE_RES_M} m, centre latitude: ${CENTRE_LAT}"
 
 # The two tile sets resolve the same grid at different zooms, because
@@ -214,22 +241,19 @@ MERGE_FP=$(fingerprint "$PIPELINE_VERSION" "$INPUT_FP" "$SRC_NODATA" "$DST_NODAT
 if step_current merge "$MERGE_FP" "$MERGED"; then
     log "merge is up to date, skipping"
 else
-    step_begin merge "$MERGED" "$OUTPUT_DIR/merged.vrt"
+    step_begin merge "$MERGED"
     log "merging $INPUT_COUNT GeoTIFF(s)"
-    VRT_OPTS=()
-    [ -n "$SRC_NODATA" ] && VRT_OPTS+=(-srcnodata "$SRC_NODATA")
-    gdalbuildvrt "${VRT_OPTS[@]}" -input_file_list "$FILE_LIST" merged.vrt
 
     if [ -n "$TARGET_SRS" ] && [ "$SRC_SRS" != "$TARGET_SRS" ]; then
         log "reprojecting ${SRC_SRS:-unknown} -> $TARGET_SRS"
         gdalwarp -t_srs "$TARGET_SRS" -r "$RESAMPLING" \
             -dstnodata "$DST_NODATA" -multi -wo NUM_THREADS="$JOBS" \
             "${CREATE_OPTS[@]}" -of GTiff \
-            merged.vrt "$MERGED"
+            "$VRT" "$MERGED"
     else
         gdal_translate -a_nodata "$DST_NODATA" \
             "${CREATE_OPTS[@]}" -of GTiff \
-            merged.vrt "$MERGED"
+            "$VRT" "$MERGED"
     fi
     step_done merge "$MERGE_FP"
 fi
@@ -243,7 +267,9 @@ if want mapbox || want terrarium; then
     if step_current fill "$FILL_FP" "$FILLED"; then
         log "nodata fill is up to date, skipping"
     else
-        step_begin fill "$FILLED"
+        # The overviews are a sidecar file. Left behind, GDAL would attach the
+        # old ones to the new raster.
+        step_begin fill "$FILLED" "$FILLED.ovr"
         log "replacing nodata ($DST_NODATA) with $FILL_VALUE"
         # Debian's gdal_calc.py does not accept --NoDataValue=None.
         gdal_calc.py -A "$MERGED" --outfile="$FILLED" \
@@ -255,9 +281,37 @@ if want mapbox || want terrarium; then
 fi
 
 # ---------------------------------------------------------------------------
+# Overviews of the filled raster, for the low zoom RGB tiles
+#
+# rio-rgbify and rio-terrarium warp every tile straight from the source. With
+# no overviews, a tile that covers the whole extent reads all of it at full
+# resolution, one worker per tile: on a 190,850 x 160,374 px raster z5-z7 had
+# not produced a tile after 50 minutes (#17). tile_driver.py picks the level
+# that matches each tile; tiles at or beyond the source resolution still read
+# the full raster and do not change.
+#
+# External (-ro) so the filled raster itself, and the fill step, stay as they
+# are. Levels are left to gdaladdo, which halves until the raster fits 256 px.
+# average rather than bilinear: each overview pixel is the mean of what it
+# covers, which is what a coarser elevation grid should hold.
+# ---------------------------------------------------------------------------
+OVERVIEW_FP=$(fingerprint "$FILL_FP" average "$BLOCKSIZE" "$COMPRESS")
+
+if want mapbox || want terrarium; then
+    if step_current overview "$OVERVIEW_FP" "$FILLED.ovr"; then
+        log "overviews are up to date, skipping"
+    else
+        step_begin overview "$FILLED.ovr"
+        log "building overviews of the filled raster"
+        gdaladdo -ro -r average             --config COMPRESS_OVERVIEW "$COMPRESS"             --config BIGTIFF_OVERVIEW YES             --config GDAL_TIFF_OVR_BLOCKSIZE "$BLOCKSIZE"             --config GDAL_NUM_THREADS "$JOBS"             "$FILLED"
+        step_done overview "$OVERVIEW_FP"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Mapbox Terrain-RGB
 # ---------------------------------------------------------------------------
-MAPBOX_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
+MAPBOX_FP=$(fingerprint "$OVERVIEW_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
 
 if want mapbox; then
     if step_current mapbox "$MAPBOX_FP" "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"; then
@@ -268,7 +322,7 @@ if want mapbox; then
         step_begin mapbox "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"
         log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding mapbox \
-            --src "$FILLED" --dst mapbox.mbtiles --file-list "$FILE_LIST" \
+            --src "$FILLED" --dst mapbox.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --base-val "$RGBIFY_BASE" --interval "$RGBIFY_INTERVAL" \
             --workers "$JOBS"
@@ -280,7 +334,7 @@ fi
 # ---------------------------------------------------------------------------
 # Terrarium
 # ---------------------------------------------------------------------------
-TERRARIUM_FP=$(fingerprint "$FILL_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
+TERRARIUM_FP=$(fingerprint "$OVERVIEW_FP" "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
 
 if want terrarium; then
     if step_current terrarium "$TERRARIUM_FP" "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"; then
@@ -289,7 +343,7 @@ if want terrarium; then
         step_begin terrarium "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"
         log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding terrarium \
-            --src "$FILLED" --dst terrarium.mbtiles --file-list "$FILE_LIST" \
+            --src "$FILLED" --dst terrarium.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --workers "$JOBS"
         mb-util --image_format="$TILE_FORMAT" terrarium.mbtiles "$OUTPUT_DIR/terrarium"

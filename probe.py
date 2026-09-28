@@ -4,24 +4,41 @@
 Writes shell-evalable assignments to stdout. Exits non-zero when the inputs
 cannot be merged safely, rather than letting gdalbuildvrt drop the odd ones
 out with a warning nobody reads.
+
+The check runs against the mosaic VRT, not the files. gdalbuildvrt has already
+opened every input and skipped the ones it could not mosaic (another CRS, an
+unreadable file), so an input missing from the VRT is exactly an input that
+would be lost. Only those, and the first file for its pixel size, are opened
+here: opening all of them again cost 449 s for 37,850 files on a Windows bind
+mount (#18).
 """
 import argparse
 import math
 import sys
+import xml.etree.ElementTree as ET
 
 import rasterio
+from rasterio.crs import CRS
 from rasterio.warp import transform as warp_transform
 
 # Web Mercator resolution at zoom 0, in metres per pixel, for a 256 px tile.
 EQUATORIAL_RES = 156543.033928041
 
 
-def crs_key(src):
-    """A comparable name for the dataset CRS."""
-    if src.crs is None:
+def crs_key(crs):
+    """A comparable name for a CRS."""
+    if crs is None:
         return "unknown"
-    epsg = src.crs.to_epsg()
-    return f"EPSG:{epsg}" if epsg else src.crs.to_wkt()[:60]
+    epsg = crs.to_epsg()
+    return f"EPSG:{epsg}" if epsg else crs.to_wkt()[:60]
+
+
+def vrt_sources(vrt_path):
+    """(crs, set of source file names) of a mosaic VRT."""
+    root = ET.parse(vrt_path).getroot()
+    srs = root.findtext("SRS")
+    names = {el.text for el in root.iter("SourceFilename")}
+    return (CRS.from_wkt(srs) if srs else None), names
 
 
 def centre_lat(src):
@@ -63,6 +80,7 @@ def matching_zoom(res_m, lat, tile_size=256):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("file_list")
+    ap.add_argument("vrt", help="mosaic VRT built from file_list by gdalbuildvrt")
     args = ap.parse_args()
 
     with open(args.file_list) as fh:
@@ -70,24 +88,29 @@ def main():
     if not paths:
         sys.exit("probe: input file list is empty")
 
-    by_crs = {}
-    for path in paths:
-        try:
-            with rasterio.open(path) as src:
-                by_crs.setdefault(crs_key(src), []).append(path)
-        except rasterio.errors.RasterioIOError as exc:
-            sys.exit(f"probe: cannot open {path}: {exc}")
-
-    if len(by_crs) > 1:
-        print("probe: inputs are in more than one CRS, refusing to merge:",
-              file=sys.stderr)
-        for key, files in sorted(by_crs.items()):
-            print(f"  {key}: {len(files)} file(s), e.g. {files[0]}",
+    vrt_crs, in_vrt = vrt_sources(args.vrt)
+    key = crs_key(vrt_crs)
+    dropped = [p for p in paths if p not in in_vrt]
+    if dropped:
+        print(f"probe: gdalbuildvrt left {len(dropped)} of {len(paths)} input(s) "
+              f"out of the mosaic ({key}), refusing to merge:", file=sys.stderr)
+        by_reason = {}
+        for path in dropped:
+            try:
+                with rasterio.open(path) as src:
+                    other = crs_key(src.crs)
+                reason = (f"CRS {other}" if other != key
+                          else "same CRS; see the gdalbuildvrt warnings above")
+            except rasterio.errors.RasterioIOError as exc:
+                reason = f"cannot open: {exc}"
+            by_reason.setdefault(reason, []).append(path)
+        for reason, files in sorted(by_reason.items()):
+            print(f"  {reason}: {len(files)} file(s), e.g. {files[0]}",
                   file=sys.stderr)
-        print("Reproject them to a common CRS first.", file=sys.stderr)
+        print("Inputs in another CRS have to be reprojected to a common CRS first.",
+              file=sys.stderr)
         sys.exit(1)
 
-    key = next(iter(by_crs))
     with rasterio.open(paths[0]) as src:
         lat = centre_lat(src)
         if lat is None:
