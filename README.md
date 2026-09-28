@@ -269,6 +269,11 @@ docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=png \
 `rio-rgbify` / `rio-terrarium` はどちらも `im.save(f, format="webp", lossless=True)` と
 ハードコードされていて、非可逆圧縮になる経路がない。
 
+静岡県の航空レーザ測深（1164 図郭）でも、3,460 タイル全てで復号画素が PNG と一致した。
+サイズは Terrarium で 31.4%、Terrain-RGB で 41.5% 減った。詳細は
+[`docs/verification-shizuoka.md`](docs/verification-shizuoka.md)、照合は
+`scripts/verify_tiles.py` で再現できる。
+
 配信済みの PNG タイルを作り直すときは `TILE_FORMAT=png` を指定する。形式を変えると
 タイル URL の拡張子（`.png` / `.webp`）が変わり、参照側の設定も直す必要があるため。
 
