@@ -72,8 +72,10 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 140 }))
 
 // タイルの 404 はデータの無い領域で常に出るので、それ以外だけを拾う。
+// gsidem:// プロトコル（maplibre-gl-gsi-terrain）は Error でなく文字列を投げる。
 map.on('error', (e) => {
-  const msg = (e as { error?: Error }).error?.message ?? String(e)
+  const err = (e as { error?: Error | string }).error
+  const msg = typeof err === 'string' ? err : (err?.message ?? String(e))
   if (msg.includes('404')) return
   console.error('[dem2tiles]', msg)
 })

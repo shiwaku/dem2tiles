@@ -2,8 +2,12 @@ import { createReadStream, statSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 
-/** dem2tiles の出力ディレクトリ。viewer/ から見た相対位置。 */
-const TILE_DIR = '../output'
+/**
+ * dem2tiles の出力ディレクトリ。viewer/ から見た相対位置。
+ *
+ * 別の出力を見るときは DEM2TILES_OUTPUT で差し替える（例 `../output-webp`）。
+ */
+const TILE_DIR = process.env.DEM2TILES_OUTPUT ?? '../output'
 
 /**
  * 配信側（R2）のキー名 → dem2tiles の出力ディレクトリ名。
