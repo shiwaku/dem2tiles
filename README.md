@@ -133,7 +133,8 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 測線状・飛び地状のデータでは大半が中身のないタイルになる。
 
 `tile_driver.py` が入力図郭のフットプリントから、データが届くタイルだけを列挙して
-タイラーに渡す。生成後に消すのではなく生成対象そのものを絞るので、時間も容量も減る。
+タイラーに渡す。フットプリントは `merged.vrt` に記録された各図郭の位置から求めるので、
+入力ファイルを開き直さない。生成後に消すのではなく生成対象そのものを絞るので、時間も容量も減る。
 
 静岡県の航空レーザ測深（1164 図郭、外接矩形 107 x 58.9 km、有効データ 61.6 km2）での実測:
 
@@ -145,19 +146,47 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 `gdal2NPtiles` は nodata を保持した `merged.tif` を読むので、もともとデータのない
 タイルを書き出さない。絞り込みは RGB 系にだけ要る。
 
+## 低ズームのタイルとオーバービュー
+
+`rio rgbify` と `rio terrarium` は、タイルを 1 枚作るたびに元のラスタから 512x512 に
+縮める。オーバービューが無いと、範囲全体を覆う低ズームのタイルは 1 枚ごとに全画素を
+原寸で読み、しかも 1 枚を 1 ワーカーが担当するので並列にならない。山梨県全域
+（190,850 x 160,374 px）では、z5〜z7 のタイルが 50 分経っても 1 枚もできなかった（#17）。
+
+そこで fill の後に `gdaladdo` で `merged_filled.tif.ovr`（外部オーバービュー、`average`）を
+作り、`tile_driver.py` がタイルの解像度に合う段を選んで読む。元の解像度に近いズーム
+（静岡・山梨の 0.5 m なら z16〜17）はオーバービューを使わず、**出力は変更前とバイト単位で
+同じ**。それより低いズームは縮小のしかたが変わるので値が少し変わる。
+
+静岡県の航空レーザ測深（1164 図郭、`merged_filled.tif` 222,948 x 101,654 px）での実測:
+
+| | 変更前 | 変更後 |
+| --- | --- | --- |
+| オーバービューの作成 | ― | 34 秒 |
+| mapbox（z5〜17） | 303 秒 | **66 秒** |
+| terrarium（z5〜17） | 298 秒 | **77 秒** |
+
+z5〜15 の値の変化（山梨の 400 図郭、terrarium）は、データの縁から離れた場所で中央値
+0.008 m、99.9% が 0.27 m 以内。5 m を超えて変わった画素の 97.6% は、NoData を 0 で埋めた
+画素から 3 px 以内にある。縁の崖を平均で縮めるか、元の解像度から双線形で縮めるかの
+違いで、どちらも 0 埋めの影響を受けた値である。
+
 ## 入力の検証
 
 マージの前に入力を点検し、**座標系が混在していればエラーで止める**。
 
 ```console
-probe: inputs are in more than one CRS, refusing to merge:
-  EPSG:6676: 128 file(s), e.g. /input/08LE2134.tif
-  EPSG:6677: 12 file(s), e.g. /input/09xxxxxx.tif
-Reproject them to a common CRS first.
+probe: gdalbuildvrt left 12 of 140 input(s) out of the mosaic (EPSG:6676), refusing to merge:
+  CRS EPSG:6677: 12 file(s), e.g. /input/09xxxxxx.tif
+Inputs in another CRS have to be reprojected to a common CRS first.
 ```
 
 `gdalbuildvrt` は座標系が食い違うファイルを警告だけ出して除外するため、放っておくと
 出力から一部の図郭が黙って欠ける。系をまたぐデータは事前に揃えること。
+
+点検は `merged.vrt` に対して行う。入力の一覧と VRT に入った図郭を突き合わせ、
+抜けたものだけを開いて理由を調べる。全ファイルを開き直すと、Windows のフォルダを
+マウントした環境では 37,850 図郭で 7 分半かかっていた（#18）。
 
 ## マージ後 GeoTIFF の作り方
 
@@ -197,10 +226,13 @@ Reproject them to a common CRS first.
 ## 中間ファイルと再実行
 
 - `output/input_files.txt` — 拾った入力の一覧
-- `output/merged.vrt` — 入力をまとめた仮想ラスタ
+- `output/merged.vrt` — 入力をまとめた仮想ラスタ。最初に一度だけ作り、入力の点検・
+  マージ・タイルの範囲の計算がこれを使う。入力ファイルを全部開くのはこの 1 回だけ
 - `output/merged.tif` — 再投影済み。NoData は保持。地理院標高タイルの元
 - `output/merged_filled.tif` — NoData を `FILL_VALUE` に置換。RGB 系タイルの元。
   `OUTPUTS` に `mapbox` も `terrarium` も無いときは作られない
+- `output/merged_filled.tif.ovr` — `merged_filled.tif` のオーバービュー。低ズームの
+  RGB 系タイルが読む（後述）
 - `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles
 - `output/mapbox`, `output/terrarium`, `output/gsidem` — 展開済みタイル
 - `output/.state/` — 各ステップの完了マーカー
@@ -226,8 +258,10 @@ Reproject them to a common CRS first.
 
 ```console
 $ docker run ... -e RGB_MAX_ZOOM=16 dem2tiles
+[dem2tiles] mosaic VRT is up to date, skipping
 [dem2tiles] merge is up to date, skipping
 [dem2tiles] nodata fill is up to date, skipping
+[dem2tiles] overviews are up to date, skipping
 [dem2tiles] building mapbox tiles (z5-16)
 [dem2tiles] building terrarium tiles (z5-16)
 [dem2tiles] gsidem tiles are up to date, skipping
