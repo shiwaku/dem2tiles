@@ -21,6 +21,18 @@
 | 設定 | すべて既定（`OUTPUTS=mapbox terrarium gsidem`、`TILE_FORMAT=webp`） |
 | ズーム | RGB 系 z5〜17（512 px）、gsidem z5〜18（256 px）。いずれも auto |
 | 比較対象 | 9/21 に同じ入力を PNG で出力したもの（`output/`） |
+| 並列数 | 14（当時の `JOBS` の既定 `nproc`） |
+
+### 処理した PC
+
+| 項目 | 内容 |
+| --- | --- |
+| 機種 | MouseComputer JGA7G60B5ABC |
+| CPU | AMD Ryzen 7 5700X（8 コア 16 スレッド、ベース 3.4 GHz） |
+| メモリ | 64 GB |
+| ストレージ | NVMe SSD 4 TB（CSSD-M2O4000GBG3NQL）。入力・出力とも同じ SSD |
+| OS | Windows 11 Pro（10.0.26200） |
+| Docker Desktop | 14 CPU / 47 GB を割り当て。入力・出力は Windows のフォルダをバインドマウント |
 
 ## 結果
 

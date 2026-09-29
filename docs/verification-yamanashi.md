@@ -20,7 +20,17 @@
 | イメージ | `main`（17e7f50）。NoData 透過（#24）、オーバービューと VRT の再利用（#23）を含む |
 | 設定 | 既定（`TILE_FORMAT=webp`、`JOBS` は `nproc` の半分で 7） |
 | 実行 | `OUTPUTS=mapbox` → `terrarium` → `gsidem` の順に 3 回。2 回目以降は VRT・merge・オーバービューを再利用 |
-| 環境 | Windows 11、Docker Desktop（14 CPU / 47 GB）、入力と出力は Windows のフォルダをマウント |
+
+### 処理した PC
+
+| 項目 | 内容 |
+| --- | --- |
+| 機種 | MouseComputer JGA7G60B5ABC |
+| CPU | AMD Ryzen 7 5700X（8 コア 16 スレッド、ベース 3.4 GHz） |
+| メモリ | 64 GB |
+| ストレージ | NVMe SSD 4 TB（CSSD-M2O4000GBG3NQL）。入力・出力とも同じ SSD |
+| OS | Windows 11 Pro（10.0.26200） |
+| Docker Desktop | 14 CPU / 47 GB を割り当て。入力・出力は Windows のフォルダをバインドマウント |
 
 処理時間のタイムスタンプは gawk の `systime()` で付けた。
 
