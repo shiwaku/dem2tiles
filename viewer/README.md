@@ -80,7 +80,12 @@ glyphs と sprite も同リポジトリの GitHub Pages を参照している。
 
 段彩の配色（`src/relief.ts` の `TINTS`）は国土地理院の点群タイル閲覧サイトの既定値で、
 全国Ｑ地図（[qchizu/qchizu_maplibre](https://github.com/qchizu/qchizu_maplibre), MIT）に由来する。
-海面下の `BATHY` はこのリポジトリで足したもの。
+
+段彩のレンジ・既定値（低地 0〜20m）・不透明度と、陰影起伏の算出方法の選択肢・プリセット
+（既定は standard、強調 0.5）は
+[shiwaku/naisui-risk-verification](https://github.com/shiwaku/naisui-risk-verification/tree/main/viewer)
+の viewer にそろえている。違いは、段彩で無データ（数値PNGの NA）を透明にすること。
+参照元は全球の Mapterhorn を読むので無データが無いが、こちらは県境や測線の外側が無データになる。
 
 ## 実装上の注意
 

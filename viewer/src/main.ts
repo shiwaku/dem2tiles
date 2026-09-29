@@ -1,5 +1,6 @@
 import maplibregl from 'maplibre-gl'
 import { Protocol } from 'pmtiles'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import './style.css'
 
 import { BASEMAPS, getBasemapStyle, type Basemap } from './basemap'
@@ -7,20 +8,24 @@ import {
   CONTOUR_LINE_ID,
   CONTOUR_SOURCE,
   CONTOUR_TEXT_ID,
+  DEFAULT_HILLSHADE_METHOD,
   DEMS,
   DEM_SOURCE,
   HILLSHADE_ID,
+  HILLSHADE_METHODS,
+  HILLSHADE_PRESETS,
   RELIEF_ID,
   contourLayers,
   contourSourceSpec,
   demByKey,
   demSourceSpec,
-  firstSymbolLayerId,
   hillshadeLayer,
   registerDemProtocols,
   type DemDef,
+  type HillshadeMethod,
 } from './dem'
 import {
+  DEFAULT_RELIEF_OPACITY,
   DEFAULT_RELIEF_RANGE,
   RELIEF_RANGES,
   RELIEF_SOURCE,
@@ -35,22 +40,35 @@ import {
 } from './relief'
 import { applyThemeAttr, initialTheme, type Theme } from './theme'
 
-/** 静岡県の航空レーザ測深のおおよその範囲。 */
+/**
+ * 画面の構成（パネル・地図のコントロール・背景地図の切替・レイヤーの積み順）は
+ * shiwaku/naisui-risk-verification の viewer にそろえている。
+ */
+
+/** 静岡県の航空レーザ測深のおおよその範囲。URL に位置が無いときの初期表示。 */
 const BOUNDS: [number, number, number, number] = [137.4786, 34.588, 138.6521, 35.1231]
 
-const $ = <T extends HTMLElement>(id: string): T => {
-  const el = document.getElementById(id)
-  if (!el) throw new Error(`#${id} が無い`)
-  return el as T
+const isMobile = window.matchMedia('(max-width: 640px)').matches
+
+const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
+  const e = document.getElementById(id)
+  if (!e) throw new Error(`#${id} が無い`)
+  return e as T
 }
-const checked = (id: string): boolean => $<HTMLInputElement>(id).checked
-const num = (id: string): number => Number($<HTMLInputElement>(id).value)
 
 // ---- 状態 ----
 let theme: Theme = initialTheme()
 let dem: DemDef = DEMS[0]!
-let basemap: Basemap = 'pale'
-let range: ReliefRange = DEFAULT_RELIEF_RANGE
+let base: Basemap = 'pale'
+let reliefOn = true
+let reliefOpacity = DEFAULT_RELIEF_OPACITY
+let reliefRange: ReliefRange = DEFAULT_RELIEF_RANGE
+let hillshadeOn = true
+let hillshadeMethod: HillshadeMethod = DEFAULT_HILLSHADE_METHOD
+let hillshadeExag = HILLSHADE_PRESETS[DEFAULT_HILLSHADE_METHOD].exaggeration
+let terrainOn = false
+let terrainExag = 1
+let contoursOn = false
 
 applyThemeAttr(theme)
 
@@ -59,17 +77,36 @@ maplibregl.addProtocol('pmtiles', new Protocol().tile as never)
 registerDemProtocols(maplibregl as never, demByKey('gsidem'))
 registerReliefProtocol(maplibregl as never)
 
+// ---- 地図 ----
+
 const map = new maplibregl.Map({
   container: 'map',
-  hash: true,
+  style: await getBasemapStyle(base, theme),
   bounds: BOUNDS,
   fitBoundsOptions: { padding: 40 },
   maxZoom: 18,
-  maxPitch: 85,
-  style: await getBasemapStyle(basemap, theme),
+  maxPitch: 70,
+  // 地図位置を URL の #ズーム/緯度/経度 に反映（共有・リロード時の位置維持）
+  hash: true,
+  attributionControl: false,
 })
-map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right')
-map.addControl(new maplibregl.ScaleControl({ maxWidth: 140 }))
+
+map.addControl(
+  new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }),
+  'top-right',
+)
+map.addControl(
+  new maplibregl.GeolocateControl({
+    positionOptions: { enableHighAccuracy: false },
+    fitBoundsOptions: { maxZoom: 16 },
+    trackUserLocation: true,
+    showUserLocation: true,
+  }),
+  'top-right',
+)
+map.addControl(new maplibregl.FullscreenControl(), 'top-right')
+map.addControl(new maplibregl.ScaleControl({ maxWidth: 200, unit: 'metric' }), 'bottom-left')
+map.addControl(new maplibregl.AttributionControl({ compact: true }))
 
 // タイルの 404 はデータの無い領域で常に出るので、それ以外だけを拾う。
 // gsidem:// プロトコル（maplibre-gl-gsi-terrain）は Error でなく文字列を投げる。
@@ -83,34 +120,113 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__map = map
 }
 
+// ---- レイヤーの積み順 ----
+//
+// 背景スタイルを差し替えると自前のレイヤーは全部消えるため、切替のたびに貼り直す。
+
+/** 自前のレイヤーID。背景スタイル側のレイヤーと見分けるために使う。 */
+const OWN_LAYER_IDS = new Set([RELIEF_ID, HILLSHADE_ID, CONTOUR_LINE_ID, CONTOUR_TEXT_ID])
+
+/**
+ * 背景地図の注記（地名・河川名など）の先頭レイヤーのID。
+ * 自前のレイヤーはこの手前に差し込み、注記だけを上に残す。
+ * 写真・白図の背景には注記が無いため undefined（最前面に積む）。
+ *
+ * 「最初の symbol レイヤー」を注記とみなすと、地理院 最適化ベクトルタイルでは
+ * 水部の小さな注記（`水部表記線point`、123レイヤー中の13番目）に当たり、自前の
+ * レイヤーが背景地図の 100 レイヤー余りの下に埋まる。市街地では建築物の不透明な
+ * 塗りに段彩も陰影も潰される。注記は `source-layer` が `Anno` のレイヤー群で、
+ * それ以降に他のレイヤーは無いので、これを目印にする。
+ */
+const ANNO_SOURCE_LAYER = 'Anno'
+
+function labelBeforeId(): string | undefined {
+  const layers = map.getStyle()?.layers ?? []
+  const anno = layers.find(
+    (l) => (l as { 'source-layer'?: string })['source-layer'] === ANNO_SOURCE_LAYER,
+  )
+  if (anno) return anno.id
+  return layers.find((l) => l.type === 'symbol' && !OWN_LAYER_IDS.has(l.id))?.id
+}
+
+/**
+ * 自前レイヤーの積み順（下から）:
+ *   背景地図 → 段彩 → 陰影起伏 → 等高線 → 背景地図の注記
+ *
+ * 段彩を陰影起伏の下に置くのが要点。陰影が段彩の上に乗ることで陰影段彩図になる。
+ * 各グループは「自分より上にあるグループのうち、いま地図にある最初のレイヤー」の
+ * 手前に差し込む。
+ */
+const LAYER_GROUPS = {
+  relief: [RELIEF_ID],
+  hillshade: [HILLSHADE_ID],
+  contour: [CONTOUR_LINE_ID, CONTOUR_TEXT_ID],
+} as const
+type LayerGroup = keyof typeof LAYER_GROUPS
+const GROUP_ORDER = Object.keys(LAYER_GROUPS) as LayerGroup[]
+
+function beforeIdFor(group: LayerGroup): string | undefined {
+  const above = GROUP_ORDER.slice(GROUP_ORDER.indexOf(group) + 1).flatMap(
+    (g) => LAYER_GROUPS[g] as readonly string[],
+  )
+  return above.find((id) => map.getLayer(id)) ?? labelBeforeId()
+}
+
+function removeLayer(id: string): void {
+  if (map.getLayer(id)) map.removeLayer(id)
+}
+
+function removeSource(id: string): void {
+  if (map.getSource(id)) map.removeSource(id)
+}
+
+/** 段彩（標高の色）。陰影起伏の下に敷く。 */
+function applyRelief(): void {
+  removeLayer(RELIEF_ID)
+  if (!reliefOn) {
+    removeSource(RELIEF_SOURCE)
+    return
+  }
+  if (!map.getSource(RELIEF_SOURCE)) map.addSource(RELIEF_SOURCE, reliefSourceSpec(reliefRange))
+  map.addLayer(reliefLayer(reliefOpacity), beforeIdFor('relief'))
+}
+
+/** 陰影起伏。 */
+function applyHillshade(): void {
+  removeLayer(HILLSHADE_ID)
+  if (!hillshadeOn) return
+  map.addLayer(hillshadeLayer(hillshadeMethod, hillshadeExag), beforeIdFor('hillshade'))
+}
+
+function applyContours(): void {
+  removeLayer(CONTOUR_LINE_ID)
+  removeLayer(CONTOUR_TEXT_ID)
+  if (!contoursOn) return
+  if (!map.getSource(CONTOUR_SOURCE)) map.addSource(CONTOUR_SOURCE, contourSourceSpec())
+  for (const l of contourLayers(theme)) map.addLayer(l, beforeIdFor('contour'))
+}
+
+function applyTerrain(): void {
+  map.setTerrain(terrainOn ? { source: DEM_SOURCE, exaggeration: terrainExag } : null)
+}
+
 /**
  * 背景スタイルの上に DEM 由来のソースとレイヤーを載せる。
  *
  * 背景（地理院最適化ベクトルタイル）のスタイルは丸ごと差し替える方式なので、
- * 背景・テーマ・標高タイルのいずれを変えてもここを通って積み直す。
+ * 背景・テーマ・標高タイル・陰影の算出方法のいずれを変えてもここを通って積み直す。
  * raster-dem のソース定義は後から差し替えられないため、どのみち作り直しが要る。
  */
 function injectDemLayers(): void {
-  // 地名より下に入れて、段彩で文字が潰れないようにする
-  const before = firstSymbolLayerId(map as never)
-
   map.addSource(DEM_SOURCE, demSourceSpec(dem))
-  map.addSource(RELIEF_SOURCE, reliefSourceSpec(range))
-  map.addSource(CONTOUR_SOURCE, contourSourceSpec())
+  applyRelief()
+  applyHillshade()
+  applyContours()
+  applyTerrain()
 
-  map.addLayer(reliefLayer(num('relief-opacity')), before)
-  map.addLayer(hillshadeLayer(num('hillshade-exag')), before)
-  for (const l of contourLayers(theme)) map.addLayer(l, before)
-
-  applyVisibility()
-
-  if (checked('terrain-on')) {
-    map.setTerrain({ source: DEM_SOURCE, exaggeration: num('terrain-exag') })
-  }
-
-  $('dem-badge').textContent = `${dem.tileSize}px z${dem.minzoom}–${dem.maxzoom}`
-  $('tile-url').textContent = dem.url
-  $('dem-note').innerHTML =
+  el('dem-badge').textContent = `${dem.tileSize}px z${dem.minzoom}–${dem.maxzoom}`
+  el('tile-url').textContent = dem.url
+  el('dem-note').innerHTML =
     dem.key === 'gsidem'
       ? '数値PNGは <code>gsidem://</code> プロトコルで取得時に terrarium へ再符号化している。' +
         'MapLibre の <code>custom</code> は線形式しか持たず、<code>x&gt;2<sup>23</sup></code> の' +
@@ -121,174 +237,275 @@ function injectDemLayers(): void {
 /** 背景スタイルを入れ替えて DEM を載せ直す。 */
 async function reloadStyle(): Promise<void> {
   map.setTerrain(null)
-  map.setStyle(await getBasemapStyle(basemap, theme), { diff: false })
+  map.setStyle(await getBasemapStyle(base, theme), { diff: false })
   // 'style.load' はスタイルの解釈が終わった時点で発火する。'load' は初回描画まで
   // 待つので、タブが背面にあると requestAnimationFrame が止まって永久に来ない。
   map.once('style.load', injectDemLayers)
 }
 
-const setVis = (id: string, on: boolean): void => {
-  if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none')
-}
+map.once('style.load', () => {
+  injectDemLayers()
+  el('zoom-val').textContent = map.getZoom().toFixed(2)
+})
+map.on('zoom', () => {
+  el('zoom-val').textContent = map.getZoom().toFixed(2)
+})
 
-function applyVisibility(): void {
-  setVis(RELIEF_ID, checked('relief-on'))
-  setVis(HILLSHADE_ID, checked('hillshade-on'))
-  const c = checked('contour-on')
-  setVis(CONTOUR_LINE_ID, c)
-  setVis(CONTOUR_TEXT_ID, c)
-}
+// ---- 標高タイル ----
 
-// ---- 凡例 ----
-function drawLegend(): void {
-  const bands = reliefLegend(range)
-  $('legend-bar').replaceChildren(
-    ...bands.slice(0, -1).map((b) => {
-      const s = document.createElement('span')
-      s.style.background = b.color
-      return s
-    }),
-  )
-  const every = reliefTickEvery(range)
-  const dec = reliefDecimals(range)
-  $('legend-ticks').replaceChildren(
-    ...bands.map((b, i) => {
-      const s = document.createElement('span')
-      s.textContent = i % every === 0 || i === bands.length - 1 ? b.from.toFixed(dec) : ''
-      return s
-    }),
-  )
-  $('step-badge').textContent = range.mode === 'abs' ? '絶対標高' : `1段 ${range.step}m`
-}
-
-// ---- UI の組み立て ----
-function segment(
-  host: HTMLElement,
-  items: { label: string }[],
-  isOn: (i: number) => boolean,
-  pick: (i: number) => void,
-): void {
-  host.replaceChildren(
-    ...items.map((item, i) => {
-      const b = document.createElement('button')
-      b.type = 'button'
-      b.textContent = item.label
-      b.setAttribute('aria-pressed', String(isOn(i)))
-      b.addEventListener('click', () => {
-        for (const el of host.querySelectorAll('button')) {
-          el.setAttribute('aria-pressed', String(el === b))
-        }
-        pick(i)
-      })
-      return b
-    }),
-  )
-}
-
-segment(
-  $('dem-modes'),
-  DEMS,
-  (i) => DEMS[i]!.key === dem.key,
-  (i) => {
-    dem = DEMS[i]!
-    void reloadStyle()
-  },
-)
-segment(
-  $('basemap-modes'),
-  BASEMAPS,
-  (i) => BASEMAPS[i]!.key === basemap,
-  (i) => {
-    basemap = BASEMAPS[i]!.key
-    void reloadStyle()
-  },
-)
-
-$<HTMLSelectElement>('relief-range').replaceChildren(
-  ...RELIEF_RANGES.map((r) => {
-    const o = document.createElement('option')
-    o.value = r.key
-    o.textContent = r.label
-    o.selected = r.key === range.key
-    return o
+const demModesEl = el('dem-modes')
+demModesEl.replaceChildren(
+  ...DEMS.map((d) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.textContent = d.label
+    b.dataset.key = d.key
+    b.setAttribute('aria-pressed', String(d.key === dem.key))
+    b.addEventListener('click', () => {
+      if (d.key === dem.key) return
+      dem = d
+      for (const x of demModesEl.querySelectorAll('button')) {
+        x.setAttribute('aria-pressed', String(x.dataset.key === dem.key))
+      }
+      void reloadStyle()
+    })
+    return b
   }),
 )
 
-drawLegend()
+// ---- 地形 ----
 
-map.once('style.load', () => {
-  injectDemLayers()
-  $('zoom-val').textContent = map.getZoom().toFixed(2)
-})
-map.on('zoom', () => {
-  $('zoom-val').textContent = map.getZoom().toFixed(2)
+const reliefOnEl = el<HTMLInputElement>('relief-on')
+const reliefOptsEl = el('relief-opts')
+const reliefOpacityEl = el<HTMLInputElement>('relief-opacity')
+const reliefOpacityValEl = el('relief-opacity-val')
+const reliefLegendEl = el('relief-legend')
+const reliefRangeEl = el<HTMLSelectElement>('relief-range')
+
+reliefOnEl.addEventListener('change', () => {
+  reliefOn = reliefOnEl.checked
+  reliefOptsEl.hidden = !reliefOn
+  applyRelief()
 })
 
-// ---- 配線 ----
-for (const id of ['relief-on', 'hillshade-on', 'contour-on']) {
-  $(id).addEventListener('change', applyVisibility)
+for (const r of RELIEF_RANGES) {
+  const opt = document.createElement('option')
+  opt.value = r.key
+  opt.textContent = r.label
+  reliefRangeEl.append(opt)
+}
+reliefRangeEl.value = reliefRange.key
+reliefRangeEl.addEventListener('change', () => {
+  reliefRange = reliefRangeByKey(reliefRangeEl.value)
+  buildReliefLegend()
+  // レンジはタイルURLに入っている。ソースを差し替えないと、MapLibre が
+  // URL単位で持っている古い色のタイルがそのまま残る。
+  removeLayer(RELIEF_ID)
+  removeSource(RELIEF_SOURCE)
+  applyRelief()
+})
+
+reliefOpacityEl.addEventListener('input', () => {
+  reliefOpacity = Number(reliefOpacityEl.value)
+  reliefOpacityValEl.textContent = `${Math.round(reliefOpacity * 100)}%`
+  if (map.getLayer(RELIEF_ID)) map.setPaintProperty(RELIEF_ID, 'raster-opacity', reliefOpacity)
+})
+
+/**
+ * 標高の凡例。帯は等幅で並べる。
+ *
+ * 「全国」レンジでは実際の標高間隔が 1m〜1000m と幅が違い、値に比例した幅に
+ * すると低標高側が潰れて読めなくなる。指定レンジでは刻み幅で等間隔に割っているので、
+ * 等幅がそのまま実際の間隔になる。どちらでも実際の境界は目盛りの数字が示す。
+ */
+function buildReliefLegend(): void {
+  const legend = reliefLegend(reliefRange)
+  // 刻みの桁で丸めたうえで末尾の 0 は落とす（0.5m 刻みでも整数の目盛りは「1」と出す）
+  const fmt = (v: number): string => String(Number(v.toFixed(reliefDecimals(reliefRange))))
+
+  const bar = document.createElement('div')
+  bar.className = 'rl-bar'
+  for (const { from, color } of legend) {
+    const cell = document.createElement('span')
+    cell.className = 'rl-cell'
+    cell.style.background = color
+    cell.title = `${fmt(from)}m 以上`
+    bar.append(cell)
+  }
+
+  const ticks = document.createElement('div')
+  ticks.className = 'rl-ticks'
+  const every = reliefRange.mode === 'abs' ? 2 : reliefTickEvery(reliefRange)
+  const show = (i: number): boolean => (reliefRange.mode === 'abs' ? i % 2 === 1 : i % every === 0)
+  legend.forEach(({ from }, i) => {
+    const t = document.createElement('span')
+    t.className = 'rl-tick'
+    t.textContent = show(i) ? fmt(from) : ''
+    ticks.append(t)
+  })
+
+  const unit = document.createElement('div')
+  unit.className = 'rl-unit'
+  unit.textContent =
+    reliefRange.mode === 'abs'
+      ? '標高（m）・段の幅は実際の標高間隔と異なる'
+      : `標高（m）・1段 ${fmt(reliefRange.step ?? 0)}m`
+  reliefLegendEl.replaceChildren(bar, ticks, unit)
+}
+buildReliefLegend()
+
+const hillshadeOnEl = el<HTMLInputElement>('hillshade-on')
+const hillshadeOptsEl = el('hillshade-opts')
+const hillshadeMethodEl = el<HTMLSelectElement>('hillshade-method')
+const hillshadeExagEl = el<HTMLInputElement>('hillshade-exag')
+const hillshadeExagValEl = el('hillshade-exag-val')
+const hillshadeDescEl = el('hillshade-desc')
+
+hillshadeOnEl.addEventListener('change', () => {
+  hillshadeOn = hillshadeOnEl.checked
+  hillshadeOptsEl.hidden = !hillshadeOn
+  applyHillshade()
+})
+
+const renderHillshadeDesc = (): void => {
+  hillshadeDescEl.textContent = HILLSHADE_METHODS.find((m) => m.key === hillshadeMethod)?.desc ?? ''
+}
+for (const { key, label } of HILLSHADE_METHODS) {
+  const opt = document.createElement('option')
+  opt.value = key
+  opt.textContent = label
+  hillshadeMethodEl.append(opt)
+}
+hillshadeMethodEl.value = hillshadeMethod
+renderHillshadeDesc()
+hillshadeMethodEl.addEventListener('change', () => {
+  hillshadeMethod = hillshadeMethodEl.value as HillshadeMethod
+  renderHillshadeDesc()
+  // 算出方法ごとに見え方の落ち着く強調が違うため、プリセット値へ戻す
+  hillshadeExag = HILLSHADE_PRESETS[hillshadeMethod].exaggeration
+  hillshadeExagEl.value = String(hillshadeExag)
+  hillshadeExagValEl.textContent = hillshadeExag.toFixed(2)
+  // setPaintProperty では multidirectional の色の配列が描画に反映されない。
+  // 陰影のレイヤーだけを外して付け直すと、共有している DEM ソースのタイルが
+  // 読み込み中のまま戻らないことがある（MapLibre 5.6、参照元の viewer で確認済み）。
+  // 背景・テーマの切り替えと同じく、スタイルごと積み直す。
+  void reloadStyle()
+})
+
+hillshadeExagEl.addEventListener('input', () => {
+  hillshadeExag = Number(hillshadeExagEl.value)
+  hillshadeExagValEl.textContent = hillshadeExag.toFixed(2)
+  if (map.getLayer(HILLSHADE_ID)) {
+    map.setPaintProperty(HILLSHADE_ID, 'hillshade-exaggeration', hillshadeExag)
+  }
+})
+
+const terrainOnEl = el<HTMLInputElement>('terrain-on')
+const terrainOptsEl = el('terrain-opts')
+const terrainExagEl = el<HTMLInputElement>('terrain-exag')
+const terrainExagValEl = el('terrain-exag-val')
+
+terrainOnEl.addEventListener('change', () => {
+  terrainOn = terrainOnEl.checked
+  terrainOptsEl.hidden = !terrainOn
+
+  if (!terrainOn) {
+    // 傾きを戻すのは地形を外したあと。順序を逆にすると、平面へ戻る途中の
+    // フレームでも地形メッシュを描き続けることになる。
+    applyTerrain()
+    if (map.getPitch() > 0) map.easeTo({ pitch: 0, duration: 600 })
+    return
+  }
+
+  // 地形メッシュの生成・DEMタイルの取得・カメラの傾けを同時に走らせると、
+  // その間フレームが落ちて操作が固まったように見える。地形が落ち着いてから傾ける。
+  // 自分で戻した角度を勝手に上書きしないよう、水平のときだけ触る。
+  applyTerrain()
+  if (map.getPitch() === 0) {
+    map.once('idle', () => {
+      if (terrainOn && map.getPitch() === 0) map.easeTo({ pitch: 55, duration: 600 })
+    })
+  }
+})
+
+// setTerrain は地形メッシュを作り直す。スライダーの1目盛りごとに呼ぶと
+// ドラッグ中に描画が追いつかないため、1フレームに1回へ束ねる。
+let terrainExagScheduled = false
+terrainExagEl.addEventListener('input', () => {
+  terrainExag = Number(terrainExagEl.value)
+  terrainExagValEl.textContent = terrainExag.toFixed(2)
+  if (!terrainOn || terrainExagScheduled) return
+  terrainExagScheduled = true
+  requestAnimationFrame(() => {
+    terrainExagScheduled = false
+    if (terrainOn && map.getSource(DEM_SOURCE)) applyTerrain()
+  })
+})
+
+const contoursOnEl = el<HTMLInputElement>('contours-on')
+contoursOnEl.addEventListener('change', () => {
+  contoursOn = contoursOnEl.checked
+  applyContours()
+})
+
+// ---- 背景地図スイッチャー（右下） ----
+
+class BasemapControl implements maplibregl.IControl {
+  private el!: HTMLElement
+  onAdd(): HTMLElement {
+    this.el = document.createElement('div')
+    this.el.className = 'maplibregl-ctrl basemap-switch'
+    for (const { key, label } of BASEMAPS) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.textContent = label
+      btn.dataset.base = key
+      btn.setAttribute('aria-selected', String(key === base))
+      btn.addEventListener('click', () => setBase(key))
+      this.el.append(btn)
+    }
+    return this.el
+  }
+  onRemove(): void {
+    this.el.remove()
+  }
+  sync(): void {
+    for (const btn of this.el.querySelectorAll<HTMLButtonElement>('button')) {
+      btn.setAttribute('aria-selected', String(btn.dataset.base === base))
+    }
+  }
+}
+const basemapCtrl = new BasemapControl()
+map.addControl(basemapCtrl, 'bottom-right')
+
+function setBase(next: Basemap): void {
+  if (next === base) return
+  base = next
+  basemapCtrl.sync()
+  void reloadStyle()
 }
 
-$('relief-opacity').addEventListener('input', (e) => {
-  const v = Number((e.target as HTMLInputElement).value)
-  $('relief-opacity-val').textContent = `${Math.round(v * 100)}%`
-  if (map.getLayer(RELIEF_ID)) map.setPaintProperty(RELIEF_ID, 'raster-opacity', v)
-})
+// ---- テーマ・パネル ----
 
-$('hillshade-exag').addEventListener('input', (e) => {
-  const v = Number((e.target as HTMLInputElement).value)
-  $('hillshade-exag-val').textContent = v.toFixed(2)
-  if (map.getLayer(HILLSHADE_ID)) {
-    map.setPaintProperty(HILLSHADE_ID, 'hillshade-exaggeration', v)
-  }
-})
-
-$('terrain-on').addEventListener('change', (e) => {
-  if ((e.target as HTMLInputElement).checked) {
-    map.setTerrain({ source: DEM_SOURCE, exaggeration: num('terrain-exag') })
-    map.easeTo({ pitch: 62, duration: 700 })
-  } else {
-    map.setTerrain(null)
-    map.easeTo({ pitch: 0, duration: 700 })
-  }
-})
-
-$('terrain-exag').addEventListener('input', (e) => {
-  const v = Number((e.target as HTMLInputElement).value)
-  $('terrain-exag-val').textContent = v.toFixed(1)
-  if (checked('terrain-on')) map.setTerrain({ source: DEM_SOURCE, exaggeration: v })
-})
-
-$('relief-range').addEventListener('change', (e) => {
-  range = reliefRangeByKey((e.target as HTMLSelectElement).value)
-  drawLegend()
-  // 色はタイルに焼かれているので、レンジを変えたらソースごと作り直す
-  if (map.getLayer(RELIEF_ID)) {
-    map.removeLayer(RELIEF_ID)
-    map.removeSource(RELIEF_SOURCE)
-    map.addSource(RELIEF_SOURCE, reliefSourceSpec(range))
-    map.addLayer(reliefLayer(num('relief-opacity')), firstSymbolLayerId(map as never))
-    applyVisibility()
-  }
-})
-
-$('theme-btn').addEventListener('click', () => {
+el('theme-btn').addEventListener('click', () => {
   theme = theme === 'dark' ? 'light' : 'dark'
   applyThemeAttr(theme)
   syncThemeBtn()
   void reloadStyle()
 })
 
-$('collapse-btn').addEventListener('click', () => {
-  $('panel').classList.toggle('collapsed')
+el('collapse-btn').addEventListener('click', () => {
+  el('panel').classList.toggle('collapsed')
   syncCollapseBtn()
 })
 
 function syncThemeBtn(): void {
-  $('theme-btn').textContent = theme === 'dark' ? '☀' : '☾'
+  el('theme-btn').textContent = theme === 'dark' ? '☀️' : '🌙'
 }
 function syncCollapseBtn(): void {
-  $('collapse-btn').textContent = $('panel').classList.contains('collapsed') ? '▾' : '▴'
+  el('collapse-btn').textContent = el('panel').classList.contains('collapsed') ? '▾' : '▴'
 }
 syncThemeBtn()
+// 狭い画面では地図を隠さないよう、パネルを畳んだ状態で始める
+if (isMobile) el('panel').classList.add('collapsed')
 syncCollapseBtn()

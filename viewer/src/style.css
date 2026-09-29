@@ -1,242 +1,957 @@
-@import 'maplibre-gl/dist/maplibre-gl.css';
-
+/* ---- デザイントークン ---- */
 :root {
-  --bg: #eef1f4;
-  --panel: rgba(255, 255, 255, 0.92);
-  --ink: #1b1f24;
-  --muted: #5d6771;
-  --line: #d8dee5;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-solid: #ffffff;
+  --ink: #14161a;
+  --ink-2: #5a6069;
+  --ink-3: #8b919b;
+  --line: rgba(20, 22, 26, 0.1);
+  --line-2: rgba(20, 22, 26, 0.16);
   --accent: #2a78d6;
   --accent-ink: #ffffff;
-  --chip: rgba(42, 120, 214, 0.1);
-  --note-bg: #fff7e8;
-  --note-line: #e6c477;
-  --note-ink: #6a4906;
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
-  /* ネイティブのフォーム部品（select のドロップダウン、スクロールバー）の地色。
-     パネル自体は半透明だが、こちらは不透明でないと選択肢が下地と混ざる。 */
-  --field-bg: #ffffff;
+  --track: rgba(20, 22, 26, 0.14);
+  --hover: rgba(20, 22, 26, 0.05);
+  --shadow: 0 10px 30px -10px rgba(16, 24, 40, 0.35), 0 2px 8px -4px rgba(16, 24, 40, 0.2);
+  --radius: 16px;
+  --radius-sm: 10px;
   color-scheme: light;
 }
+
 :root[data-theme='dark'] {
-  --bg: #0f1318;
-  --panel: rgba(26, 31, 38, 0.92);
-  --ink: #e7ebf0;
-  --muted: #97a2ad;
-  --line: #2f3740;
-  --accent: #58a6ff;
-  --accent-ink: #0d1117;
-  --chip: rgba(88, 166, 255, 0.14);
-  --note-bg: #2c2412;
-  --note-line: #67521f;
-  --note-ink: #e6c98d;
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
-  --field-bg: #1f242b;
+  --surface: rgba(24, 26, 30, 0.9);
+  --surface-solid: #1b1e24;
+  --ink: #f2f4f7;
+  --ink-2: #b3b9c4;
+  --ink-3: #7d838e;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-2: rgba(255, 255, 255, 0.16);
+  --accent: #4f97f0;
+  --accent-ink: #0a0c10;
+  --track: rgba(255, 255, 255, 0.16);
+  --hover: rgba(255, 255, 255, 0.07);
+  --shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.6), 0 2px 8px -4px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
 
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
-body {
-  background: var(--bg);
-  color: var(--ink);
-  font: 13.5px/1.6 system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans',
-        'Noto Sans JP', sans-serif;
-  -webkit-font-smoothing: antialiased;
+* {
+  box-sizing: border-box;
 }
-#map { position: absolute; inset: 0; }
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font-family: system-ui, -apple-system, 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+  color: var(--ink);
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+}
 
 /* ---- パネル ---- */
 .panel {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  width: 300px;
-  max-height: calc(100% - 24px);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 330px;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  /* backdrop-filter（すりガラス）は使わない。実GPUでの合成不具合により、
+     地図の再描画時にパネルが白く飛ぶ環境があるため。 */
+  background: var(--surface);
+  border-right: 1px solid var(--line);
   box-shadow: var(--shadow);
-  z-index: 2;
-  overflow: hidden;
 }
-@media (max-width: 680px) {
-  .panel { left: 8px; right: 8px; width: auto; max-height: 56%; }
+
+/* 畳んだらヘッダの高さだけに（全高固定を解除） */
+.panel.collapsed {
+  bottom: auto;
+  border-bottom: 1px solid var(--line);
+  border-bottom-right-radius: var(--radius);
+}
+
+.panel.collapsed .panel-body,
+.panel.collapsed .panel-foot {
+  display: none;
 }
 
 .panel-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 11px 12px 11px 14px;
+  padding: 12px 12px 10px;
   border-bottom: 1px solid var(--line);
 }
-.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.brand-mark { font-size: 15px; }
-.panel h1 { font-size: 14px; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
-.head-actions { margin-left: auto; display: flex; gap: 4px; }
-.icon-btn {
-  width: 26px; height: 26px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  display: grid;
-  place-items: center;
-}
-.icon-btn:hover { color: var(--ink); border-color: var(--muted); }
 
-.panel-body { overflow-y: auto; padding: 12px 14px 14px; }
-.panel.collapsed .panel-body { display: none; }
-
-.field { margin-bottom: 14px; }
-.field:last-child { margin-bottom: 0; }
-.field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.field-label {
-  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.07em; color: var(--muted);
-}
-.count-badge {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--muted);
-  background: var(--chip);
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---- セグメント（排他選択） ---- */
-.seg { display: flex; gap: 4px; flex-wrap: wrap; }
-.seg button {
-  flex: 1 1 auto;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+}
+
+.brand-mark {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 縦並び。標高タイルは名前が長く、横に詰めると省略記号で読めなくなる。 */
-.seg-v { flex-direction: column; }
-.seg-v button { flex: none; text-align: left; }
 
-.seg button[aria-pressed='true'] {
+.head-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* パネル内スクロールが地図のズーム/ページスクロールへ連鎖しないようにする */
+  overscroll-behavior: contain;
+}
+
+.panel-foot {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+.panel-foot a {
+  color: var(--ink-2);
+}
+
+.disclaimer {
+  /* 浸水実績は「過去の記録」であって想定区域ではない。混同されると読み違えに
+     つながるため、出典表記に埋もれないよう囲みを付けて先に置く。 */
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.build-ver {
+  display: block;
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+/* ---- フィールド見出し / ミニボタン ---- */
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+
+.field-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.mini-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mini-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.mini-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.count-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-ink);
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+
+.note code {
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--hover);
+}
+
+/* 画面中央の DEM の細かさ。凡例の直下に置き、メッシュサイズだけ濃く出す */
+.dem-note {
+  color: var(--ink-2);
+}
+
+.dem-note strong {
+  color: var(--ink);
+  font-weight: 700;
 }
 
 /* ---- トグル ---- */
 .toggle {
-  display: flex; align-items: center; gap: 9px;
-  padding: 4px 0; cursor: pointer; user-select: none;
-}
-.toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
-.switch {
-  width: 32px; height: 18px; flex: none;
-  border-radius: 999px;
-  background: var(--line);
   position: relative;
-  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  /* 中の checkbox（視覚非表示）を必ずこのラベル内に閉じ込める */
+  overflow: hidden;
 }
+
+.toggle:hover {
+  background: var(--hover);
+}
+
+.toggle input[type='checkbox'] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.switch {
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--track);
+  transition: background 0.15s ease;
+}
+
 .switch::after {
   content: '';
-  position: absolute; top: 2px; left: 2px;
-  width: 14px; height: 14px; border-radius: 50%;
-  background: #fff;
-  transition: transform 0.15s;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-solid);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
 }
-.toggle input:checked + .switch { background: var(--accent); }
-.toggle input:checked + .switch::after { transform: translateX(14px); }
-.toggle input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
-.t-label { font-weight: 500; }
 
+.toggle input:checked + .switch {
+  background: var(--accent);
+}
+
+.toggle input:checked + .switch::after {
+  transform: translateX(14px);
+}
+
+.toggle input:focus-visible + .switch {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.t-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---- スライダー行 ---- */
 .slider-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 2px 0 6px 41px;
-  font-size: 12px; color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 8px 4px 0;
 }
-.slider-row input[type='range'] { flex: 1; min-width: 0; accent-color: var(--accent); }
-.op-val { min-width: 3em; text-align: right; font-variant-numeric: tabular-nums; }
 
+.slider-row > label {
+  flex: none;
+  width: 62px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.slider-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.op-val {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 地形の下位オプションは、親トグルに従属することが分かるよう字下げする */
+#relief-opts,
+#hillshade-opts,
+#terrain-opts {
+  margin-left: 42px;
+}
+
+/* ---- 段彩の凡例 ---- */
+.relief-legend {
+  margin: 6px 8px 8px 0;
+}
+
+.rl-bar {
+  display: flex;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.rl-cell {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 目盛りは帯のセルと同じ等幅で並べ、境界の真下に数字が来るようにする */
+.rl-ticks {
+  display: flex;
+  margin-top: 2px;
+}
+
+.rl-tick {
+  flex: 1;
+  min-width: 0;
+  font-size: 8.5px;
+  line-height: 1.2;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  /* セルの左端が示す下限標高なので、数字も左端に寄せる */
+  text-align: left;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.rl-unit {
+  margin-top: 2px;
+  font-size: 9.5px;
+  color: var(--ink-3);
+}
+
+/* ---- セレクト ---- */
 .select {
   width: 100%;
-  padding: 5px 7px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--field-bg);
+  padding: 6px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
   color: var(--ink);
-  font: inherit;
-  font-size: 12.5px;
+  font-family: inherit;
+  font-size: 12px;
 }
-/* ドロップダウンの選択肢は OS 側が描く。背景を指定しないと、ダークでは
-   白地のまま文字色だけ明色を継いで読めなくなる。 */
-.select option {
-  background: var(--field-bg);
+
+.select-inline {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+#hillshade-opts .select {
+  margin-bottom: 2px;
+}
+
+/* ---- コンボボックス（水害イベントの検索付き選択） ---- */
+.combo {
+  position: relative;
+}
+
+.combo-input {
+  width: 100%;
+  padding: 6px 26px 6px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
   color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.combo-input::placeholder {
+  color: var(--ink-3);
+}
+
+.combo-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.combo-input:disabled {
+  opacity: 0.6;
+}
+
+.combo-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.combo-clear:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* 候補はパネル内スクロールに載せず、入力欄に重ねて出す。
+   パネルの他の項目を押し下げると、絞り込みのたびに画面が跳ねる。 */
+.combo-list {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+
+.combo-opt {
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.combo-opt:hover,
+.combo-opt.active {
+  background: var(--hover);
+}
+
+.combo-opt.active {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.combo-opt[aria-selected='true'] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.combo-opt-all {
+  border-bottom: 1px solid var(--line);
+  border-radius: 6px 6px 0 0;
+  margin-bottom: 2px;
+  color: var(--ink-2);
+}
+
+.combo-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ---- セグメント（色分けの切替） ---- */
+.seg {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+}
+
+.seg button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.seg button:last-child {
+  border-right: 0;
+}
+
+.seg button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.seg button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 
 /* ---- 凡例 ---- */
-.legend-bar {
-  display: flex; height: 12px; margin-top: 8px;
-  border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
+.legend {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.legend-bar span { flex: 1; }
-.legend-ticks {
-  display: flex; margin-top: 3px;
-  font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
-}
-.legend-ticks span { flex: 1; text-align: center; }
-.legend-ticks span:first-child { text-align: left; }
-.legend-ticks span:last-child { text-align: right; }
 
-.note {
-  background: var(--note-bg);
-  border: 1px solid var(--note-line);
-  color: var(--note-ink);
-  border-radius: 8px;
-  padding: 7px 9px;
-  margin: 8px 0 0;
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11.5px;
-  line-height: 1.55;
+  color: var(--ink-2);
 }
-.note:empty { display: none; }
-.note code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+.legend .sw {
+  flex: none;
+  width: 22px;
+  height: 12px;
+  border-radius: 3px;
+  /* 濃い段が背景に溶けないよう、面の縁に地の色のリングを1本入れる */
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.legend .lg-label {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 凡例の小見出し（地形分類の自然地形・人工地形） */
+.legend .lg-group {
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.legend .lg-group:first-child {
+  margin-top: 0;
+}
+
+.legend .lg-count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 背景地図スイッチャー（右下） ---- */
+.basemap-switch {
+  display: flex;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  /* backdrop-filter は背景切替時のホバーで白化するため使わず、不透明背景にする */
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+
+.basemap-switch button {
+  padding: 6px 12px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.basemap-switch button:last-child {
+  border-right: 0;
+}
+
+.basemap-switch button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.basemap-switch button[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ---- ポップアップ（MapLibre 上書き） ---- */
+.maplibregl-popup-content {
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* tip は透明な太枠のうち「吹き出し本体と反対側の1辺」だけに色が付いて三角に見える。
+   全辺に色を付けると三角が潰れて四角になるため、MapLibre と同じくアンカー別に指定する。 */
+.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: var(--surface-solid);
+}
+
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: var(--surface-solid);
+}
+
+.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--surface-solid);
+}
+
+.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--surface-solid);
+}
+
+.maplibregl-popup-close-button {
+  color: var(--ink-3);
+  font-size: 18px;
+  padding: 2px 8px;
+}
+
+.maplibregl-popup-close-button:hover {
+  background-color: var(--hover);
+  color: var(--ink);
+}
+
+.pop-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 重なっている浸水域をすべて並べるため、スクロールは本文側で受け持つ */
+.pop-body {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 地形分類と浸水実績の両方が出るときは、節ごとではなくポップアップ全体でスクロールする。
+   節ごとに 300px ずつ取ると合計が画面の高さを超え、下の節が画面外に切れる */
+.pop:has(.pop-landform) {
+  max-height: min(480px, 60vh);
+  overflow-y: auto;
+}
+
+.pop:has(.pop-landform) .pop-body {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* 地点についての一言（DEM の細かさ）。属性表の外、いちばん下 */
+.pop-foot {
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.pop-item + .pop-item {
+  border-top: 2px solid var(--line);
+}
+
+.pop-item-head {
+  margin: 0;
+  padding: 6px 12px 4px;
   font-size: 11px;
-  background: rgba(127, 127, 127, 0.18);
-  padding: 1px 4px; border-radius: 3px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.pop-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.pop-tbl th,
+.pop-tbl td {
+  padding: 5px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.pop-tbl th {
+  width: 40%;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.pop-tbl tr:last-child th,
+.pop-tbl tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 地形分類の節。説明文が長いので本文とは別に高さを抑える */
+.pop-landform p {
+  margin: 0;
+  padding: 2px 12px 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.pop-landform p b {
+  margin-right: 4px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pop-landform .pop-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.pop-landform .sw {
+  flex: none;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.pop-tag {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.pop-note {
+  margin: 0;
+  padding: 4px 12px 8px;
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+/* ---- MapLibre コントロールの馴染ませ ---- */
+.maplibregl-ctrl-group {
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--line);
+}
+
+/* MapLibre 標準の .maplibregl-ctrl-attrib.maplibregl-compact（背景 #fff / 文字 #000）は
+   詳細度が高くクラス1つでは上書きできない。同じ詳細度で当ててテーマ色を効かせる。 */
+.maplibregl-ctrl.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-attrib.maplibregl-compact {
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--ink-2);
+}
+
+.maplibregl-ctrl-attrib a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+:root[data-theme='dark'] .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1);
+}
+
+/* 現在地ボタンは状態を色で示す（追跡中=青 #33b5e5 / エラー=赤 #e54e33）。
+   反転させると意味が逆の色になるため、状態アイコンだけ反転から除外する。 */
+:root[data-theme='dark'] .maplibregl-ctrl-group button.maplibregl-ctrl-geolocate-active .maplibregl-ctrl-icon,
+:root[data-theme='dark'] .maplibregl-ctrl-group button.maplibregl-ctrl-geolocate-active-error .maplibregl-ctrl-icon,
+:root[data-theme='dark'] .maplibregl-ctrl-group button.maplibregl-ctrl-geolocate-background .maplibregl-ctrl-icon,
+:root[data-theme='dark']
+  .maplibregl-ctrl-group
+  button.maplibregl-ctrl-geolocate-background-error
+  .maplibregl-ctrl-icon {
+  filter: none;
+}
+
+:root[data-theme='dark'] .maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+}
+
+.maplibregl-ctrl-scale {
+  background: var(--surface);
+  border-color: var(--line-2);
+  color: var(--ink-2);
+}
+
+/* ---- レスポンシブ（モバイルはボトムシート） ---- */
+@media (max-width: 640px) {
+  .panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    max-height: 62vh;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .panel.collapsed {
+    /* デスクトップ用の .panel.collapsed { bottom:auto } を打ち消す */
+    bottom: 0;
+    top: auto;
+    border-bottom: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* 畳んだパネルのヘッダ分だけ、地図コントロールを持ち上げる */
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left {
+    bottom: 56px;
+  }
+
+  /* タッチ操作しやすいよう当たり判定を拡大 */
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .toggle {
+    padding: 10px 8px;
+  }
+}
+
+/* ---- 診断HUD（?debug 時のみ） ---- */
+#diag-hud {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  max-width: 46vw;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.75);
+  color: #e8f0ff;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+/* ---- dem2tiles 固有 ----
+ * ここより上は shiwaku/naisui-risk-verification の viewer と同じ。
+ * 標高タイルの切替（縦並びのボタン）と、表示中のタイル URL の欄だけを足す。 */
+.seg-v {
+  flex-direction: column;
+}
+
+.seg-v button {
+  flex: none;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  padding: 6px 10px;
+}
+
+.seg-v button:last-child {
+  border-bottom: 0;
 }
 
 .readout {
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-  font-size: 11.5px; color: var(--muted);
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
-.readout b { color: var(--ink); font-weight: 600; }
+
+.readout b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .tile-url {
   margin-top: 3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px;
   word-break: break-all;
 }
-
-/* MapLibre 側のコントロールをテーマに合わせる */
-.maplibregl-ctrl-attrib { font-size: 10.5px; }
