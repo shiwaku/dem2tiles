@@ -6,20 +6,21 @@ import { ATTRIBUTION, RELIEF_ID, absoluteTileUrl, demByKey } from './dem'
  *
  * MapLibre 5 には標高を直接色に写すレイヤーが無いため、DEM タイルを取得して
  * 画素ごとに標高を読み、色に置き換えたラスタタイルを返すカスタムプロトコルで
- * 実現する。方式は shiwaku/ksj-suigai-rireki-converter の viewer に倣う。
- * 元をたどると国土地理院の点群タイル閲覧サイト（gsi-cyberjapan/3dpc-3dtiles）と
+ * 実現する。配色・レンジ・既定値は shiwaku/naisui-risk-verification の viewer に
+ * そろえる。元をたどると国土地理院の点群タイル閲覧サイト（gsi-cyberjapan/3dpc-3dtiles）と
  * 全国Ｑ地図（qchizu/qchizu_maplibre, MIT）の実装。
  *
- * 読む DEM は数値PNGタイルに固定する。terrarium / Terrain-RGB は欠測を 0m で
- * 埋めてあり「データが無い」と「標高 0m」を区別できないが、数値PNGは欠測を
- * NA（x = 2^23）のまま持っている。段彩で無データ域を透明にするにはこれが要る。
+ * 読む DEM は数値PNGタイルに固定する。数値PNGは欠測を NA（x = 2^23）として持つので、
+ * 無データ域を透明にできる。参照元は全球の Mapterhorn を読むので無データ域が無いが、
+ * こちらは県境や測線の外側が無データで、そこを塗ると背景地図が読めなくなる。
  * 3種類とも同じ DEM が元なので、どの表示を選んでいても段彩は一致する。
  */
 
 export const RELIEF_SOURCE = 'relief'
 export const RELIEF_PROTOCOL = 'relief'
 
-export const DEFAULT_RELIEF_OPACITY = 0.6
+/** 段彩の既定不透明度。背景地図の地名や水系が透ける程度に抑える。 */
+export const DEFAULT_RELIEF_OPACITY = 0.55
 
 /** 段彩タイルを実際に生成する最大ズーム。 */
 const RELIEF_MAX_ZOOM = 15
@@ -56,22 +57,6 @@ const TINTS: Stop[] = [
   { from: 4000, color: [255, 255, 255] },
 ]
 
-/**
- * 海面下の色。TINTS は −10m と 0m が同色で、海底の段差を表せない。
- * 航空レーザ測深は水深こそ見たいデータなので、深いほど濃い青になる帯を別に持つ。
- * 海図・地形図の慣習にならい、深い＝濃紺、浅い＝淡い水色。
- */
-const BATHY: Rgb[] = [
-  [8, 48, 107],
-  [16, 78, 139],
-  [24, 110, 170],
-  [43, 140, 190],
-  [78, 168, 210],
-  [124, 196, 228],
-  // 浅い側を白に寄せすぎない。ほぼ白にすると背景と溶けて汀線が読めなくなる。
-  [173, 221, 242],
-]
-
 export interface ReliefRange {
   key: string
   label: string
@@ -84,26 +69,21 @@ export interface ReliefRange {
 }
 
 /**
- * レンジはデータの分布に合わせる。配色は min〜max を段数ぶんに割るので、
- * 実データより広いレンジを選ぶと帯の大半が使われず、全部が淡い側に寄って
- * 読めなくなる。
- *
- * 静岡県の航空レーザ測深で実測した分布（150図郭の標本）:
- *   水深  中央値 −3.7m、25〜75%ile −5.0〜−2.4m、99.9% が −10m 以浅
- *   陸域  中央値  2.6m、95%ile 10.1m、99%ile 24.2m、最大 84.9m
+ * 「全国」の配色は -10〜4000m を 16 段で塗る。山地を含む広域では正しいが、低地の
+ * 微小な起伏は 2 段に収まって読めない。そこでレンジを選べるようにし、指定レンジでは
+ * 1 段の刻み幅（0.5m、1m、5m…）を決めて、全国の配色を段数ぶんに補間して塗る。
+ * 刻みを先に決めれば、凡例の目盛りが 0, 0.5, 1.0… とそろう。
  */
+// 刻み幅はセレクトの名前に入れない（幅に収まらず末尾が切れる）。凡例の横の「1段 0.5m」が示す。
 export const RELIEF_RANGES: ReliefRange[] = [
-  // 航空レーザ測深は水深を測るデータ。沿岸はここが既定。
-  { key: 'coast', label: '海底 −10〜0m', mode: 'linear', min: -10, max: 0, step: 0.5 },
-  { key: 'shallow', label: '浅海 −5〜0m（細かく）', mode: 'linear', min: -5, max: 0, step: 0.25 },
-  { key: 'shore', label: '汀線 −5〜5m', mode: 'linear', min: -5, max: 5, step: 0.5 },
-  { key: 'coastland', label: '沿岸+陸 −10〜30m', mode: 'linear', min: -10, max: 30, step: 1 },
-  { key: 'plain', label: '平野 0〜100m', mode: 'linear', min: 0, max: 100, step: 5 },
-  { key: 'mountain', label: '山地 0〜1000m', mode: 'linear', min: 0, max: 1000, step: 50 },
   { key: 'all', label: '全国（地形図の絶対標高）', mode: 'abs', min: -10, max: 4000 },
+  { key: 'mountain', label: '山地 0〜1000m', mode: 'linear', min: 0, max: 1000, step: 50 },
+  { key: 'plain', label: '平野 0〜100m', mode: 'linear', min: 0, max: 100, step: 5 },
+  { key: 'lowland', label: '低地 0〜20m', mode: 'linear', min: 0, max: 20, step: 1 },
+  { key: 'micro', label: '微地形 0〜5m（窪地）', mode: 'linear', min: 0, max: 5, step: 0.5 },
 ]
 
-export const DEFAULT_RELIEF_RANGE = RELIEF_RANGES[0]!
+export const DEFAULT_RELIEF_RANGE = RELIEF_RANGES[3]!
 
 export const reliefRangeByKey = (key: string): ReliefRange =>
   RELIEF_RANGES.find((r) => r.key === key) ?? DEFAULT_RELIEF_RANGE
@@ -138,32 +118,21 @@ export function reliefStops(range: ReliefRange): Stop[] {
   if (range.mode === 'abs') return TINTS
   const step = range.step ?? (range.max - range.min) / 14
   const bands = Math.round((range.max - range.min) / step)
-  const land = TINTS.slice(1).map((t) => t.color)
-
-  /** 色の帯の上を 0〜1 でたどる。 */
-  const along = (ramp: Rgb[], u: number): Rgb => {
-    const x = Math.max(0, Math.min(1, u)) * (ramp.length - 1)
-    const i = Math.floor(x)
-    const j = Math.min(i + 1, ramp.length - 1)
-    const t = x - i
-    const a = ramp[i]!
-    const b = ramp[j]!
-    return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])]
-  }
-
-  // 海面（0m）を配色の境にする。レンジ全体に1本の帯を引き伸ばすと、海底を含む
-  // レンジで 0m が配色の中央（黄〜橙）に来て陸と海の境が読めない。海面下は
-  // BATHY、陸は TINTS と、別々の帯をそれぞれの幅に合わせる。
-  const pick = (v: number): Rgb => {
-    if (range.min >= 0) return along(land, (v - range.min) / (range.max - range.min))
-    if (v > 0) return along(land, v / range.max)
-    return along(BATHY, (v - range.min) / -range.min)
-  }
-
+  const ramp = TINTS.slice(1).map((t) => t.color)
   const stops: Stop[] = []
   for (let i = 0; i <= bands; i++) {
+    // 段の位置 0〜1 を 15 色のグラデーション上の位置に写して補間する
+    const u = (i / bands) * (ramp.length - 1)
+    const lo = Math.floor(u)
+    const hi = Math.min(lo + 1, ramp.length - 1)
+    const t = u - lo
+    const a = ramp[lo]!
+    const b = ramp[hi]!
+    const color: Rgb = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])]
+    // 0.1 の 3 倍が 0.30000000000000004 になる類の誤差を刻みの桁で丸め、
+    // 凡例の数字とタイル URL のキーを揃える
     const from = Number((range.min + step * i).toFixed(6))
-    stops.push({ from, color: pick(from) })
+    stops.push({ from, color })
   }
   return stops
 }
@@ -264,7 +233,7 @@ async function colorize(buffer: ArrayBuffer, range: ReliefRange): Promise<ArrayB
       d[i + 3] = 0
       continue
     }
-    // 海面下も塗る。ALB では海底こそ見たい場所なので「0m以下は透明」にはしない。
+    // 海面下もレンジの下端の色で塗る。透明にするのは NA（無データ）だけ。
     const h = (x < NA ? x : x - 0x1000000) * GSI_U
     let t = (h - range.min) * scale
     t = t < 0 ? 0 : t > last ? last : t

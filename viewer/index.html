@@ -23,7 +23,7 @@
     </header>
 
     <div id="panel-body" class="panel-body">
-      <!-- ---- 標高タイルの切替 ---- -->
+      <!-- ---- 標高タイル（dem2tiles の3種類） ---- -->
       <div class="field">
         <div class="field-head">
           <span class="field-label">標高タイル</span>
@@ -31,66 +31,81 @@
         </div>
         <div id="dem-modes" class="seg seg-v" role="group" aria-label="標高タイルを選ぶ"></div>
         <p id="dem-note" class="note"></p>
-      </div>
-
-      <!-- ---- 重ねるもの ---- -->
-      <div class="field">
-        <div class="field-head"><span class="field-label">表示</span></div>
-        <label class="toggle">
-          <input id="relief-on" type="checkbox" checked />
-          <span class="switch"></span><span class="t-label">段彩</span>
-        </label>
-        <div class="slider-row">
-          <label for="relief-opacity">不透明度</label>
-          <input id="relief-opacity" type="range" min="0.05" max="1" step="0.05" value="0.6" />
-          <span id="relief-opacity-val" class="op-val">60%</span>
-        </div>
-        <label class="toggle">
-          <input id="hillshade-on" type="checkbox" checked />
-          <span class="switch"></span><span class="t-label">陰影起伏</span>
-        </label>
-        <div class="slider-row">
-          <label for="hillshade-exag">強調</label>
-          <input id="hillshade-exag" type="range" min="0" max="1" step="0.05" value="0.35" />
-          <span id="hillshade-exag-val" class="op-val">0.35</span>
-        </div>
-        <label class="toggle">
-          <input id="contour-on" type="checkbox" />
-          <span class="switch"></span><span class="t-label">等高線</span>
-        </label>
-        <label class="toggle">
-          <input id="terrain-on" type="checkbox" />
-          <span class="switch"></span><span class="t-label">3D 地形</span>
-        </label>
-        <div class="slider-row">
-          <label for="terrain-exag">起伏</label>
-          <input id="terrain-exag" type="range" min="0.5" max="8" step="0.5" value="1" />
-          <span id="terrain-exag-val" class="op-val">1.0</span>
+        <div class="readout">
+          <div>ズーム <b id="zoom-val">–</b></div>
+          <div id="tile-url" class="tile-url"></div>
         </div>
       </div>
 
-      <!-- ---- 段彩のレンジと凡例 ---- -->
+      <!-- ---- 地形 ---- -->
       <div class="field">
         <div class="field-head">
-          <span class="field-label">段彩のレンジ</span>
-          <span id="step-badge" class="count-badge">–</span>
+          <span class="field-label">地形</span>
         </div>
-        <select id="relief-range" class="select" aria-label="段彩のレンジ"></select>
-        <div id="legend-bar" class="legend-bar"></div>
-        <div id="legend-ticks" class="legend-ticks"></div>
-      </div>
 
-      <!-- ---- 背景地図 ---- -->
-      <div class="field">
-        <div class="field-head"><span class="field-label">背景地図</span></div>
-        <div id="basemap-modes" class="seg" role="group" aria-label="背景地図を選ぶ"></div>
-      </div>
+        <label class="toggle">
+          <input id="relief-on" type="checkbox" checked />
+          <span class="switch"></span>
+          <span class="t-label">段彩（標高）</span>
+        </label>
+        <div id="relief-opts">
+          <div class="slider-row">
+            <label for="relief-range">標高レンジ</label>
+            <select id="relief-range" class="select select-inline" aria-label="段彩の標高レンジ"></select>
+          </div>
+          <div class="slider-row">
+            <label for="relief-opacity">不透明度</label>
+            <input id="relief-opacity" type="range" min="0.1" max="1" step="0.05" value="0.55" />
+            <span id="relief-opacity-val" class="op-val">55%</span>
+          </div>
+          <div id="relief-legend" class="relief-legend" aria-label="標高の凡例"></div>
+          <p class="note">段彩は数値PNGタイルから作り、無データ（NA）は透明にする。レンジを狭めると色が引き伸ばされ、細かな起伏が読める。</p>
+        </div>
 
-      <div class="field readout">
-        <div>ズーム <b id="zoom-val">–</b></div>
-        <div id="tile-url" class="tile-url"></div>
+        <label class="toggle">
+          <input id="hillshade-on" type="checkbox" checked />
+          <span class="switch"></span>
+          <span class="t-label">陰影起伏</span>
+        </label>
+        <div id="hillshade-opts">
+          <select id="hillshade-method" class="select" aria-label="陰影起伏の算出方法"></select>
+          <p id="hillshade-desc" class="note" aria-live="polite"></p>
+          <div class="slider-row">
+            <label for="hillshade-exag">強調</label>
+            <input id="hillshade-exag" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <span id="hillshade-exag-val" class="op-val">0.50</span>
+          </div>
+        </div>
+
+        <label class="toggle">
+          <input id="terrain-on" type="checkbox" />
+          <span class="switch"></span>
+          <span class="t-label">3D地形</span>
+        </label>
+        <div id="terrain-opts" hidden>
+          <div class="slider-row">
+            <label for="terrain-exag">起伏倍率</label>
+            <input id="terrain-exag" type="range" min="0" max="2" step="0.05" value="1" />
+            <span id="terrain-exag-val" class="op-val">1.00</span>
+          </div>
+        </div>
+
+        <label class="toggle">
+          <input id="contours-on" type="checkbox" />
+          <span class="switch"></span>
+          <span class="t-label">等高線</span>
+        </label>
+
+        <p class="note">陰影起伏・3D地形は選んだ標高タイルを読む。等高線は Terrarium タイルから実行時に生成する。</p>
       </div>
     </div>
+
+    <footer class="panel-foot">
+      標高タイル: <a href="https://github.com/shiwaku/dem2tiles" target="_blank" rel="noopener">dem2tiles</a>
+      （元データは各県の航空レーザ測量成果）<br />
+      背景: <a href="https://github.com/gsi-cyberjapan/optimal_bvmap" target="_blank" rel="noopener">国土地理院 最適化ベクトルタイル</a> / <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a><br />
+      ビューワの元: <a href="https://github.com/shiwaku/naisui-risk-verification" target="_blank" rel="noopener">naisui-risk-verification</a>
+    </footer>
   </section>
 
   <script type="module" src="/src/main.ts"></script>
