@@ -23,6 +23,19 @@
 - 数値PNG（gsidem）は変わらない
 - タイルの枚数（範囲の計算）は変わらない
 
+### 処理した PC
+
+| 項目 | 内容 |
+| --- | --- |
+| 機種 | MouseComputer JGA7G60B5ABC |
+| CPU | AMD Ryzen 7 5700X（8 コア 16 スレッド、ベース 3.4 GHz） |
+| メモリ | 64 GB |
+| ストレージ | NVMe SSD 4 TB（CSSD-M2O4000GBG3NQL）。入力・出力とも同じ SSD |
+| OS | Windows 11 Pro（10.0.26200） |
+| Docker Desktop | 14 CPU / 47 GB を割り当て。入力・出力は Windows のフォルダをバインドマウント |
+
+並列数は、静岡・山梨 400 図郭とも変更前・変更後ともに 14（当時の `JOBS` の既定 `nproc`）。
+
 ## 処理時間
 
 タイムスタンプは gawk の `systime()` で付けた（1 行ずつ `date` を起動すると記録が遅れる。
