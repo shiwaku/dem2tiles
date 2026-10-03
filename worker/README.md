@@ -14,9 +14,9 @@ ZXY のまま R2 に上げると、山梨だけで 3 種類 585,117 オブジェ
 | `https://tiles.shi-works.com/{dir...}/{name}.json`（TileJSON） | 同上 |
 
 ```
-https://tiles.shi-works.com/pref-yamanashi/yamanashi-terrarium/{z}/{x}/{y}.webp
-https://tiles.shi-works.com/pref-yamanashi/yamanashi-terrain-rgb/{z}/{x}/{y}.webp
-https://tiles.shi-works.com/pref-yamanashi/yamanashi-dem-png/{z}/{x}/{y}.png
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrarium/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrain-rgb/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-dem-png/{z}/{x}/{y}.png
 ```
 
 - 拡張子は中身の形式と一致させる。違えば 404（`.png` で WebP を返さない）

@@ -7,8 +7,8 @@
  *   GET /{dir...}/{name}/{z}/{x}/{y}.{ext}  → R2 の pmtiles/{dir...}/{name}.pmtiles の 1 タイル
  *   GET /{dir...}/{name}.json               → TileJSON
  *
- * 例: /pref-yamanashi/yamanashi-terrarium/12/3620/1610.webp
- *     → pmtiles/pref-yamanashi/yamanashi-terrarium.pmtiles
+ * 例: /pref-yamanashi/yamanashi-lp-terrarium/12/3620/1610.webp
+ *     → pmtiles/pref-yamanashi/yamanashi-lp-terrarium.pmtiles
  *
  * キーの第 1 階層 pmtiles/ は xserver-cleanup の R2-STRUCTURE.md §4 に従う。同じアーカイブは
  * shi-works.com/pmtiles/... からも pmtiles:// でそのまま読める。
