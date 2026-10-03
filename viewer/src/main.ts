@@ -9,20 +9,23 @@ import {
   CONTOUR_SOURCE,
   CONTOUR_TEXT_ID,
   DEFAULT_HILLSHADE_METHOD,
-  DEMS,
   DEM_SOURCE,
   HILLSHADE_ID,
   HILLSHADE_METHODS,
   HILLSHADE_PRESETS,
+  REGIONS,
   RELIEF_ID,
   contourLayers,
   contourSourceSpec,
   demByKey,
   demSourceSpec,
   hillshadeLayer,
+  regionAt,
   registerDemProtocols,
   type DemDef,
+  type DemKind,
   type HillshadeMethod,
+  type Region,
 } from './dem'
 import {
   DEFAULT_RELIEF_OPACITY,
@@ -45,8 +48,14 @@ import { applyThemeAttr, initialTheme, type Theme } from './theme'
  * shiwaku/naisui-risk-verification の viewer にそろえている。
  */
 
-/** 静岡県の航空レーザ測深のおおよその範囲。URL に位置が無いときの初期表示。 */
-const BOUNDS: [number, number, number, number] = [137.4786, 34.588, 138.6521, 35.1231]
+/**
+ * 最初に開く地域。URL の #ズーム/緯度/経度 がどこかの地域を指していればそこ、無ければ先頭（静岡）。
+ * 共有された URL を開いたとき、その場所にデータのある地域を選んでおく。
+ */
+function initialRegion(): Region {
+  const [, lat, lng] = location.hash.slice(1).split('/').map(Number)
+  return (lat !== undefined && lng !== undefined && regionAt(lng, lat)) || REGIONS[0]!
+}
 
 const isMobile = window.matchMedia('(max-width: 640px)').matches
 
@@ -58,7 +67,9 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 
 // ---- 状態 ----
 let theme: Theme = initialTheme()
-let dem: DemDef = DEMS[0]!
+let region: Region = initialRegion()
+let demKind: DemKind = 'terrarium'
+let dem: DemDef = demByKey(region.key, demKind)
 let base: Basemap = 'pale'
 let reliefOn = true
 let reliefOpacity = DEFAULT_RELIEF_OPACITY
@@ -74,7 +85,7 @@ applyThemeAttr(theme)
 
 // 背景の最適化ベクトルタイルは PMTiles で配信されている
 maplibregl.addProtocol('pmtiles', new Protocol().tile as never)
-registerDemProtocols(maplibregl as never, demByKey('gsidem'))
+registerDemProtocols(maplibregl as never)
 registerReliefProtocol(maplibregl as never)
 
 // ---- 地図 ----
@@ -82,7 +93,8 @@ registerReliefProtocol(maplibregl as never)
 const map = new maplibregl.Map({
   container: 'map',
   style: await getBasemapStyle(base, theme),
-  bounds: BOUNDS,
+  // URL に位置があれば hash がそちらを優先する
+  bounds: region.bounds,
   fitBoundsOptions: { padding: 40 },
   maxZoom: 18,
   maxPitch: 70,
@@ -187,7 +199,7 @@ function applyRelief(): void {
     removeSource(RELIEF_SOURCE)
     return
   }
-  if (!map.getSource(RELIEF_SOURCE)) map.addSource(RELIEF_SOURCE, reliefSourceSpec(reliefRange))
+  if (!map.getSource(RELIEF_SOURCE)) map.addSource(RELIEF_SOURCE, reliefSourceSpec(reliefRange, region.key))
   map.addLayer(reliefLayer(reliefOpacity), beforeIdFor('relief'))
 }
 
@@ -202,7 +214,7 @@ function applyContours(): void {
   removeLayer(CONTOUR_LINE_ID)
   removeLayer(CONTOUR_TEXT_ID)
   if (!contoursOn) return
-  if (!map.getSource(CONTOUR_SOURCE)) map.addSource(CONTOUR_SOURCE, contourSourceSpec())
+  if (!map.getSource(CONTOUR_SOURCE)) map.addSource(CONTOUR_SOURCE, contourSourceSpec(region.key))
   for (const l of contourLayers(theme)) map.addLayer(l, beforeIdFor('contour'))
 }
 
@@ -251,11 +263,43 @@ map.on('zoom', () => {
   el('zoom-val').textContent = map.getZoom().toFixed(2)
 })
 
+// ---- 地域 ----
+
+const regionModesEl = el('region-modes')
+const regionNoteEl = el('region-note')
+
+function syncRegion(): void {
+  for (const x of regionModesEl.querySelectorAll('button')) {
+    x.setAttribute('aria-pressed', String(x.dataset.key === region.key))
+  }
+  regionNoteEl.textContent = region.source
+}
+
+regionModesEl.replaceChildren(
+  ...REGIONS.map((r) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.textContent = r.label
+    b.dataset.key = r.key
+    b.addEventListener('click', () => {
+      if (r.key === region.key) return
+      region = r
+      // 選んでいる種類（Terrarium など）はそのまま、地域だけ替える
+      dem = demByKey(region.key, demKind)
+      syncRegion()
+      map.fitBounds(region.bounds, { padding: 40, duration: 0 })
+      void reloadStyle()
+    })
+    return b
+  }),
+)
+syncRegion()
+
 // ---- 標高タイル ----
 
 const demModesEl = el('dem-modes')
 demModesEl.replaceChildren(
-  ...DEMS.map((d) => {
+  ...region.dems.map((d) => {
     const b = document.createElement('button')
     b.type = 'button'
     b.textContent = d.label
@@ -263,7 +307,8 @@ demModesEl.replaceChildren(
     b.setAttribute('aria-pressed', String(d.key === dem.key))
     b.addEventListener('click', () => {
       if (d.key === dem.key) return
-      dem = d
+      demKind = d.key
+      dem = demByKey(region.key, demKind)
       for (const x of demModesEl.querySelectorAll('button')) {
         x.setAttribute('aria-pressed', String(x.dataset.key === dem.key))
       }

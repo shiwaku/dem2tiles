@@ -1,5 +1,5 @@
 import type { LayerSpecification, RasterSourceSpecification } from 'maplibre-gl'
-import { ATTRIBUTION, RELIEF_ID, absoluteTileUrl, demByKey } from './dem'
+import { ATTRIBUTION, RELIEF_ID, absoluteTileUrl, demByKey, type RegionKey } from './dem'
 
 /**
  * 段彩図（標高を色で塗り分けたラスタ）。陰影起伏の下に敷いて陰影段彩図にする。
@@ -279,8 +279,8 @@ export function registerReliefProtocol(maplibre: MaplibreLike): void {
   }) as never)
 }
 
-export function reliefSourceSpec(range: ReliefRange): RasterSourceSpecification {
-  const src = demByKey('gsidem')
+export function reliefSourceSpec(range: ReliefRange, region: RegionKey): RasterSourceSpecification {
+  const src = demByKey(region, 'gsidem')
   const url = absoluteTileUrl(src.url)
   return {
     type: 'raster',
