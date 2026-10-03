@@ -9,6 +9,8 @@
   数値PNG 約 1 時間 55 分
 - 元の GeoTIFF との照合（400 点）で、3 種類とも中央値 0.06 m、最大 0.54 m
 - RGB 系の NoData は透過になっていて、透過の画素は -9999 を符号化した値を持つ
+- 3 種類を PMTiles にして R2 に上げ、Worker（`tiles.shi-works.com`）で ZXY として配った
+  （2026-10-03、[PMTiles 化と配信](#pmtiles-化と配信)）。全タイルが ZXY 出力とバイト一致
 
 ## 条件
 
@@ -88,6 +90,8 @@
 
 RGB 系は、範囲の計算で入った 98,786 枚のうち、データが 1 画素も無い 413 枚を除いた。
 
+mbtiles は PMTiles を作ったあと 2026-10-03 に消した（中身は展開済みディレクトリと PMTiles にある）。
+
 Terrarium が Terrain-RGB の約 3.5 倍大きいのは、標高の小数部を 1/256 m 刻みで持つため
 （[`verification-shizuoka.md`](verification-shizuoka.md) 参照）。
 
@@ -117,6 +121,65 @@ RGB 系の z12 の全タイルと z16 の 60 枚を抜き取って確かめた�
 
 アルファは 0 と 255 の 2 値だけ。
 
+## PMTiles 化と配信
+
+2026-10-03。3 種類を PMTiles にし、R2 に上げ、Worker で ZXY として配った（PR #29、#30）。
+構成は README の「配信（PMTiles + Worker）」。
+
+### PMTiles 化
+
+| 種類 | PMTiles | サイズ | 変換 |
+| --- | --- | ---: | ---: |
+| Terrarium | `yamanashi-lp-terrarium.pmtiles` | 20.7 GB | 730 秒 |
+| Terrain-RGB | `yamanashi-lp-terrain-rgb.pmtiles` | 6.0 GB | 未計測 |
+| 数値PNG | `yamanashi-lp-dem-png.pmtiles` | 24.0 GB | 903 秒（mbtiles に詰めるのに別途 25 分） |
+
+- 3 種類とも、全タイル（98,373 / 98,373 / 389,371）が ZXY 出力とバイト一致し、欠け・余りも無かった
+  （`scripts/verify_pmtiles.py`）
+- 変換は Python 版 pmtiles 3.8.1 の `pmtiles-convert`。数値PNG は mb-util でディレクトリから
+  mbtiles に詰め（約 725 枚/秒）、範囲の metadata を足してから変換した
+- RGB 系は当初 dem2tiles の mbtiles をそのまま変換しようとして、Terrarium が 2 時間 44 分経っても
+  出力 0 バイトだった。`tiles` にインデックスが無く、1 枚引くたびに 20 GB を全件走査していた（Issue #28）。
+  コピーに一意インデックスを張ると 730 秒で終わった
+- Terrain-RGB の変換時間は、止めたつもりの最初の実行が裏で変換を終えていたため測れていない
+
+`scripts/make_pmtiles.sh` は、この経験から RGB 系もディレクトリから mb-util で詰め直す手順に
+そろえたもの。静岡（3 種類）では同じ PMTiles がバイト数まで一致して作れることを確かめたが、
+山梨の規模では通していない。
+
+### R2 へのアップロード
+
+aws cli（S3 互換 API、マルチパート）で `pmtiles/pref-yamanashi/` に上げた。
+
+| ファイル | 所要 |
+| --- | ---: |
+| `yamanashi-lp-terrain-rgb.pmtiles`（6.0 GB） | 8 分 37 秒 |
+| `yamanashi-lp-terrarium.pmtiles`（20.7 GB） | 29 分 34 秒 |
+| `yamanashi-lp-dem-png.pmtiles`（24.0 GB） | 34 分 7 秒 |
+| 計 50.7 GB | 1 時間 12 分（平均約 12 MB/s） |
+
+R2 上のサイズは 3 ファイルとも手元とバイト数まで一致した。
+
+### Worker 経由の照合
+
+`https://tiles.shi-works.com/pref-yamanashi/{名前}/{z}/{x}/{y}.{ext}` から取り、ZXY 出力と比べた
+（`scripts/verify_worker.mjs`）。全部取ると約 50 GB の通信になるので、z12 以下は全部、z13 以上は
+無作為に 2,000 枚。
+
+| 種類 | 照合した枚数 | 一致 | データの無い隣接タイルが 404 | 所要 |
+| --- | ---: | ---: | ---: | ---: |
+| Terrarium | 2,150 | 2,150 | 53 / 53 | 66 秒 |
+| Terrain-RGB | 2,150 | 2,150 | 52 / 52 | 50 秒 |
+| 数値PNG | 2,150 | 2,150 | 37 / 37 | 61 秒 |
+
+公開版のビューワ（<https://shiwaku.github.io/dem2tiles/>）で、山梨の段彩・陰影起伏・等高線が
+描画されることも確かめた。
+
+### 気づいたこと
+
+z13 前後で、川や道路沿いに白い点が並ぶ所がある。無データ（川など）の縁で陰影起伏が
+出しているように見えるが、未確認。
+
 ## 再現手順
 
 ```bash
@@ -130,3 +193,19 @@ done
 
 Windows の Git Bash から実行するときは、マウントに `$(pwd)` を使わず `C:/...` の形で書くこと
 （一時フォルダなどが `/tmp/...` と解釈され、Docker の内部に出力されることがある）。
+
+PMTiles 化から配信の照合まで:
+
+```bash
+pip install mbutil pmtiles
+scripts/make_pmtiles.sh output-yamanashi yamanashi-lp      # 作って全タイルを照合する
+for n in terrarium terrain-rgb dem-png; do
+  aws s3 cp output-yamanashi/pmtiles/yamanashi-lp-$n.pmtiles \
+    s3://shi-works/pmtiles/pref-yamanashi/yamanashi-lp-$n.pmtiles \
+    --profile r2-shiworks --endpoint-url https://<アカウントID>.r2.cloudflarestorage.com
+done
+B=https://tiles.shi-works.com/pref-yamanashi
+node scripts/verify_worker.mjs $B/yamanashi-lp-terrarium   output-yamanashi/terrarium webp 2000
+node scripts/verify_worker.mjs $B/yamanashi-lp-terrain-rgb output-yamanashi/mapbox    webp 2000
+node scripts/verify_worker.mjs $B/yamanashi-lp-dem-png     output-yamanashi/gsidem    png  2000
+```

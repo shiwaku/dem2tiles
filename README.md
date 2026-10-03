@@ -257,7 +257,9 @@ Inputs in another CRS have to be reprojected to a common CRS first.
 - `output/merged_rgb.vrt`, `output/merged_rgb.vrt.ovr` — `merged.tif` を指す VRT と
   そのオーバービュー。RGB 系タイルの元。`OUTPUTS` に `mapbox` も `terrarium` も無いときは
   作られない
-- `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles
+- `output/mapbox.mbtiles`, `output/terrarium.mbtiles` — 展開前の mbtiles。`tiles` に
+  インデックスが無く範囲の metadata も無いので、PMTiles の元にはしない（後述、Issue #28）。
+  再実行時のスキップの判定に使うので、消すと RGB 系が作り直しになる
 - `output/mapbox`, `output/terrarium`, `output/gsidem` — 展開済みタイル
 - `output/.state/` — 各ステップの完了マーカー
 
@@ -336,6 +338,70 @@ docker run --rm -u `id -u`:`id -g` -e TILE_FORMAT=png \
 
 `gsidem` はこの設定の対象外で、常に PNG を出す。地理院標高タイル（PNG形式）の仕様が
 256x256 の PNG であり、地理院互換であることがこの出力の存在理由のため。
+
+## 配信（PMTiles + Worker）
+
+[Mapterhorn](https://github.com/mapterhorn/mapterhorn)（`tiles.mapterhorn.com`）と同じ構成で配る。
+R2 には県・種類ごとに PMTiles を 1 ファイル置き、Worker（[`worker/`](worker/)）が
+`{z}/{x}/{y}` の URL で 1 タイルずつ取り出して返す。利用側から見れば ZXY のタイルのまま。
+
+ZXY のまま R2 に上げると、山梨だけで 3 種類 585,117 オブジェクトになる。PMTiles なら 3 ファイル。
+
+```
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrarium/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrain-rgb/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-dem-png/{z}/{x}/{y}.png
+```
+
+| | 置き場所 |
+| --- | --- |
+| PMTiles | R2 バケット `shi-works` の `pmtiles/{県}/{県}-{元データ}-{種類}.pmtiles` |
+| 同じアーカイブを `pmtiles://` で直接読む | `https://shi-works.com/pmtiles/...`（R2 のカスタムドメイン） |
+| ZXY で読む | `https://tiles.shi-works.com/{県}/{名前}/{z}/{x}/{y}.{ext}`（Worker） |
+
+名前の「元データ」は静岡が `alb`（航空レーザ測深）、山梨が `lp`（航空レーザ測量）。
+種類は `terrarium` / `terrain-rgb` / `dem-png`。
+
+静岡は先に ZXY のまま `raster-tiles/pref-shizuoka/` に上げてあり、そちらで配っている。
+
+### PMTiles を作る
+
+```bash
+pip install mbutil pmtiles
+scripts/make_pmtiles.sh output-yamanashi yamanashi-lp
+# → output-yamanashi/pmtiles/yamanashi-lp-{terrarium,terrain-rgb,dem-png}.pmtiles
+```
+
+展開済みの ZXY ディレクトリを mb-util で mbtiles に詰め直し、範囲の metadata を足して
+`pmtiles convert` にかけ、全タイルを ZXY ディレクトリとバイト単位で照合する。
+
+dem2tiles が書く `*.mbtiles` は使わない。`tiles` にインデックスが無く、山梨の規模では
+変換が終わらない（2 時間 44 分で出力 0 バイト。Issue #28）。範囲とズームの metadata も無い。
+
+山梨での実測は [`docs/verification-yamanashi.md`](docs/verification-yamanashi.md#pmtiles-化と配信)。
+
+### R2 に上げる
+
+1 ファイルが数十 GB あり `wrangler r2 object put` の上限を超えるので、S3 互換 API
+（aws cli のマルチパート）で上げる。
+
+```bash
+aws s3 cp output-yamanashi/pmtiles/yamanashi-lp-terrarium.pmtiles \
+  s3://shi-works/pmtiles/pref-yamanashi/yamanashi-lp-terrarium.pmtiles \
+  --profile r2-shiworks --endpoint-url https://<アカウントID>.r2.cloudflarestorage.com
+```
+
+上げたあと、Worker 経由のタイルを照合する（深いズームは抜き取り）。
+
+```bash
+node scripts/verify_worker.mjs \
+  https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrarium output-yamanashi/terrarium webp 2000
+```
+
+### ビューワ
+
+[`viewer/`](viewer/) は 3 種類を切り替えて段彩・陰影起伏・等高線・3D 地形で確かめるビューワ。
+公開版は <https://shiwaku.github.io/dem2tiles/>。静岡と山梨をパネルで切り替える。
 
 ## 地理院標高タイル（PNG形式）について
 

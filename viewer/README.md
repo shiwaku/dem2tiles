@@ -80,7 +80,7 @@ VITE_TILES_EXT=webp npm run dev
 
 | ファイル | 役割 |
 | --- | --- |
-| `src/dem.ts` | 3種類の標高タイルの定義、`raster-dem` / 等高線のソース、陰影起伏レイヤー |
+| `src/dem.ts` | 地域（静岡・山梨）と3種類の標高タイルの定義、`raster-dem` / 等高線のソース、陰影起伏レイヤー |
 | `src/relief.ts` | 段彩。DEM を色に置き換えるカスタムプロトコルと配色・レンジ |
 | `src/basemap.ts` | 背景地図。最適化ベクトルタイルのスタイルを読み、ダークは色を明度反転 |
 | `src/theme.ts` | テーマの保存と適用 |
@@ -97,11 +97,21 @@ glyphs と sprite も同リポジトリの GitHub Pages を参照している。
 段彩の配色（`src/relief.ts` の `TINTS`）は国土地理院の点群タイル閲覧サイトの既定値で、
 全国Ｑ地図（[qchizu/qchizu_maplibre](https://github.com/qchizu/qchizu_maplibre), MIT）に由来する。
 
-段彩のレンジ・既定値（低地 0〜20m）・不透明度と、陰影起伏の算出方法の選択肢・プリセット
+段彩のレンジ・静岡の既定値（低地 0〜20m）・不透明度と、陰影起伏の算出方法の選択肢・プリセット
 （既定は standard、強調 0.5）は
 [shiwaku/naisui-risk-verification](https://github.com/shiwaku/naisui-risk-verification/tree/main/viewer)
 の viewer にそろえている。違いは、段彩で無データ（数値PNGの NA）を透明にすること。
 参照元は全球の Mapterhorn を読むので無データが無いが、こちらは県境や測線の外側が無データになる。
+
+地域ごとに既定を変えているもの（`src/dem.ts` の `REGIONS` と `CONTOUR_THRESHOLDS`）:
+
+| | 静岡 | 山梨 |
+| --- | --- | --- |
+| 段彩の既定レンジ | 低地 0〜20m | 全国（地形図の絶対標高） |
+| 等高線の間隔 [補助, 主曲線]（z11 / z14） | 50, 250 m / 5, 25 m | 100, 500 m / 10, 50 m |
+
+山梨は 3,000 m 級の山地で、静岡と同じ値では段彩が一色になり、等高線が急斜面を埋める。
+地域を切り替えると、段彩のレンジはその地域の既定に戻る。
 
 ## 実装上の注意
 
@@ -113,7 +123,8 @@ glyphs と sprite も同リポジトリの GitHub Pages を参照している。
 
 **等高線は terrarium タイルから作る。** `maplibre-contour` は DEM を自前の
 HTTP で取るため MapLibre のプロトコルを経由できない。3種類とも同じ DEM が元なので、
-どの表示を選んでいても等高線の位置は一致する。
+どの表示を選んでいても等高線の位置は一致する。`DemSource` は地域ごとに作り、プロトコル名の
+接頭辞（`id: dem-{地域}`）を分けている。同じ接頭辞だと後から登録した地域に上書きされる。
 
 **レイヤーの注入は `style.load` で行う。** `load` は初回描画まで待つので、
 タブが背面にあると `requestAnimationFrame` が止まって永久に発火しない。

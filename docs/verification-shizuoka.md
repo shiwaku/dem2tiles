@@ -137,6 +137,19 @@ PNG から変換したものではない。
 （変換済みの CS 立体図も `.png` で取ると 404）。そのため URL の拡張子を `.webp` に変えて対応した。
 Worker が動き出したら、URL を `.png` に戻せる。
 
+2026-10-03 に Cloudflare の API で確かめたところ、`shi-works.com` は R2 バケットのカスタムドメインで、
+Worker は通っていなかった（アカウントの Worker は別用途の 2 つだけ）。CORS はバケット側で設定されている。
+
+## PMTiles 化（2026-10-03）
+
+山梨を PMTiles + Worker で配る前に、静岡で手順を確かめた。静岡は R2 には ZXY のまま置いていて、
+PMTiles は上げていない。
+
+- `scripts/make_pmtiles.sh` で 3 種類とも PMTiles にでき、全タイル（3,460 / 3,460 / 9,017）が ZXY 出力と
+  バイト一致した。サイズは Terrarium 232 MB、Terrain-RGB 66 MB、数値PNG 260 MB
+- `worker/` をローカル（`wrangler dev` + ローカル R2）で動かし、Worker 経由でも全タイルが一致し、
+  データの無い隣接タイルがすべて 404 になることを確かめた。ビューワを向けても 3 種類とも描画された
+
 ## 再現手順
 
 ```bash
