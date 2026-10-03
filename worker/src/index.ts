@@ -27,12 +27,14 @@ const TILE_MAX_AGE = 86400
 const TILE_PATH = /^\/((?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+)\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.([a-z0-9]+)$/
 const TILEJSON_PATH = /^\/((?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+)\.json$/
 
-const CONTENT_TYPE: Partial<Record<TileType, [ext: string, type: string]>> = {
-  [TileType.Mvt]: ['pbf', 'application/x-protobuf'],
-  [TileType.Png]: ['png', 'image/png'],
-  [TileType.Jpeg]: ['jpg', 'image/jpeg'],
-  [TileType.Webp]: ['webp', 'image/webp'],
-  [TileType.Avif]: ['avif', 'image/avif'],
+// 受け付ける拡張子。先頭は getTileJson が URL に出すもの（pmtiles の tileTypeExt）にそろえる。
+// MVT は mvt/ 配下の慣習（{z}/{x}/{y}.pbf）でも引けるよう pbf も通す
+const CONTENT_TYPE: Partial<Record<TileType, [exts: string[], type: string]>> = {
+  [TileType.Mvt]: [['mvt', 'pbf'], 'application/x-protobuf'],
+  [TileType.Png]: [['png'], 'image/png'],
+  [TileType.Jpeg]: [['jpg'], 'image/jpeg'],
+  [TileType.Webp]: [['webp'], 'image/webp'],
+  [TileType.Avif]: [['avif'], 'image/avif'],
 }
 
 class NotFound extends Error {}
@@ -92,7 +94,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const header = await p.getHeader()
     const ct = CONTENT_TYPE[header.tileType]
     // 拡張子は中身と一致させる。.png で WebP を返すと、拡張子で形式を決める利用側が壊れる
-    if (!ct || ct[0] !== ext) return empty(404)
+    if (!ct || !ct[0].includes(ext!)) return empty(404)
     if (z < header.minZoom || z > header.maxZoom) return empty(404)
     const tile = await p.getZxy(z, x, y)
     // データの無い領域。dem2tiles の ZXY 出力でもファイルが無く 404 になるので合わせる
