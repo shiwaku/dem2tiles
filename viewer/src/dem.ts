@@ -68,6 +68,11 @@ export interface Region {
   source: string
   /** データのおおよその範囲 [西, 南, 東, 北]。切り替えたときにここへ寄せる。 */
   bounds: [number, number, number, number]
+  /**
+   * 段彩の既定の標高レンジ（relief.ts の RELIEF_RANGES のキー）。地域を替えたときにこれへ戻す。
+   * 静岡は沿岸の低地、山梨は 3,000 m 級の山地で、同じレンジでは片方が一色になる。
+   */
+  reliefRange: string
   dems: DemDef[]
 }
 
@@ -115,6 +120,7 @@ export const REGIONS: Region[] = [
     label: '静岡',
     source: '静岡県 航空レーザ測深（ALB）。沿岸部のみ',
     bounds: [137.4786, 34.588, 138.6521, 35.1231],
+    reliefRange: 'lowland',
     dems: demDefs(
       'shizuoka',
       BASE,
@@ -131,6 +137,7 @@ export const REGIONS: Region[] = [
     label: '山梨',
     source: '山梨県 航空レーザ測量（LP）グリッドデータ。県全域',
     bounds: [138.1778, 35.1671, 139.1364, 35.9736],
+    reliefRange: 'all',
     dems: demDefs(
       'yamanashi',
       YAMANASHI_BASE,

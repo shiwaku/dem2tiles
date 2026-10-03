@@ -29,7 +29,6 @@ import {
 } from './dem'
 import {
   DEFAULT_RELIEF_OPACITY,
-  DEFAULT_RELIEF_RANGE,
   RELIEF_RANGES,
   RELIEF_SOURCE,
   reliefDecimals,
@@ -73,7 +72,7 @@ let dem: DemDef = demByKey(region.key, demKind)
 let base: Basemap = 'pale'
 let reliefOn = true
 let reliefOpacity = DEFAULT_RELIEF_OPACITY
-let reliefRange: ReliefRange = DEFAULT_RELIEF_RANGE
+let reliefRange: ReliefRange = reliefRangeByKey(region.reliefRange)
 let hillshadeOn = true
 let hillshadeMethod: HillshadeMethod = DEFAULT_HILLSHADE_METHOD
 let hillshadeExag = HILLSHADE_PRESETS[DEFAULT_HILLSHADE_METHOD].exaggeration
@@ -286,6 +285,9 @@ regionModesEl.replaceChildren(
       region = r
       // 選んでいる種類（Terrarium など）はそのまま、地域だけ替える
       dem = demByKey(region.key, demKind)
+      reliefRange = reliefRangeByKey(region.reliefRange)
+      reliefRangeEl.value = reliefRange.key
+      buildReliefLegend()
       syncRegion()
       map.fitBounds(region.bounds, { padding: 40, duration: 0 })
       void reloadStyle()
