@@ -32,12 +32,19 @@ shi-works.com 本体は R2 のカスタムドメインで、Worker は通らな�
 
 ## PMTiles の作り方
 
-dem2tiles の出力から作る。手順と注意点は Issue #28。
+dem2tiles の出力（展開済みの ZXY ディレクトリ）から `scripts/make_pmtiles.sh` で作る。
 
-- RGB 系（terrarium / mapbox）: `*.mbtiles` にインデックスと `bounds` / `minzoom` / `maxzoom` /
-  `center` を足してから `pmtiles convert`
-- 数値PNG（gsidem）: `mb-util --image_format=png --scheme=xyz gsidem/ gsidem.mbtiles` で詰め、
-  metadata を足してから `pmtiles convert`
+```bash
+pip install mbutil pmtiles
+scripts/make_pmtiles.sh output-yamanashi yamanashi-lp
+# → output-yamanashi/pmtiles/yamanashi-lp-{terrarium,terrain-rgb,dem-png}.pmtiles
+```
+
+ディレクトリを mb-util で mbtiles に詰め、範囲の metadata を足して `pmtiles convert` にかけ、
+全タイルを照合する。dem2tiles が書く `*.mbtiles` はインデックスが無く変換が終わらないので
+使わない（Issue #28）。
+
+上げたあとの照合は `scripts/verify_worker.mjs`（ルートの README「配信」）。
 
 ## ローカルで確かめる
 
@@ -66,4 +73,4 @@ npm run deploy
 初回は `tiles.shi-works.com` のカスタムドメインが作られる（`wrangler.jsonc` の `routes`）。
 
 PMTiles のアップロードは `wrangler r2 object put` では上限（300 MB 程度）を超えるので、
-R2 の S3 互換 API（rclone / aws cli のマルチパート）で上げる。
+R2 の S3 互換 API（aws cli のマルチパート）で上げる。山梨は aws cli のプロファイル `r2-shiworks` で上げた（ルートの README「配信」）。
