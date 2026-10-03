@@ -14,7 +14,7 @@ import type {
  */
 
 /**
- * タイルの配信元。
+ * 静岡のタイルの配信元。
  *
  * パスは配信側（R2）のキー名で書く。dem2tiles の出力ディレクトリ名とは違うが、
  * 名前を2系統持つと URL の組み立てが env の値で分岐してしまう。dev では
@@ -23,19 +23,30 @@ import type {
 const BASE = import.meta.env.VITE_TILES_BASE ?? '/tiles'
 
 /**
- * RGB 符号化タイル（terrarium / mapbox）の拡張子。
+ * 静岡の RGB 符号化タイル（terrarium / mapbox）の拡張子。
  *
  * dem2tiles の `TILE_FORMAT` に合わせる。WebP は可逆なので中身は PNG と同じで、
  * 変わるのは URL の拡張子だけ。gsidem は常に PNG なのでここの対象外。
  */
 const RGB_EXT = import.meta.env.VITE_TILES_EXT ?? 'png'
 
+/**
+ * 山梨のタイルの配信元。
+ *
+ * R2 には PMTiles で置き、Worker（リポジトリの worker/）が ZXY で返す。Mapterhorn と同じ構成。
+ * ZXY のまま上げると 3 種類で 58 万オブジェクトになるため。dev でも本番の Worker を読む。
+ */
+const YAMANASHI_BASE =
+  import.meta.env.VITE_YAMANASHI_TILES_BASE ?? 'https://tiles.shi-works.com/pref-yamanashi'
+
 export const ATTRIBUTION = 'dem2tiles'
 
 export type DemKind = 'terrarium' | 'mapbox' | 'gsidem'
+export type RegionKey = 'shizuoka' | 'yamanashi'
 
 export interface DemDef {
   key: DemKind
+  region: RegionKey
   label: string
   /** タイル画素数。rio 系は 512、gdal2NPtiles は 256。 */
   tileSize: number
@@ -50,35 +61,107 @@ export interface DemDef {
   url: string
 }
 
-export const DEMS: DemDef[] = [
+export interface Region {
+  key: RegionKey
+  label: string
+  /** 元データ。パネルに出す。 */
+  source: string
+  /** データのおおよその範囲 [西, 南, 東, 北]。切り替えたときにここへ寄せる。 */
+  bounds: [number, number, number, number]
+  /**
+   * 段彩の既定の標高レンジ（relief.ts の RELIEF_RANGES のキー）。地域を替えたときにこれへ戻す。
+   * 静岡は沿岸の低地、山梨は 3,000 m 級の山地で、同じレンジでは片方が一色になる。
+   */
+  reliefRange: string
+  dems: DemDef[]
+}
+
+/** 3 種類の定義。ズームと画素数は 0.5m グリッドの dem2tiles 出力で共通。 */
+function demDefs(
+  region: RegionKey,
+  base: string,
+  names: Record<DemKind, string>,
+  rgbExt: string,
+): DemDef[] {
+  return [
+    {
+      key: 'terrarium',
+      region,
+      label: 'Terrarium',
+      tileSize: 512,
+      minzoom: 5,
+      maxzoom: 17,
+      url: `${base}/${names.terrarium}/{z}/{x}/{y}.${rgbExt}`,
+    },
+    {
+      key: 'mapbox',
+      region,
+      label: 'Mapbox Terrain-RGB',
+      tileSize: 512,
+      minzoom: 5,
+      maxzoom: 17,
+      url: `${base}/${names.mapbox}/{z}/{x}/{y}.${rgbExt}`,
+    },
+    {
+      key: 'gsidem',
+      region,
+      label: '数値PNG（地理院互換）',
+      tileSize: 256,
+      minzoom: 5,
+      maxzoom: 18,
+      url: `${base}/${names.gsidem}/{z}/{x}/{y}.png`,
+    },
+  ]
+}
+
+export const REGIONS: Region[] = [
   {
-    key: 'terrarium',
-    label: 'Terrarium',
-    tileSize: 512,
-    minzoom: 5,
-    maxzoom: 17,
-    url: `${BASE}/shizuoka-alb-terrarium/{z}/{x}/{y}.${RGB_EXT}`,
+    key: 'shizuoka',
+    label: '静岡',
+    source: '静岡県 航空レーザ測深（ALB）。沿岸部のみ',
+    bounds: [137.4786, 34.588, 138.6521, 35.1231],
+    reliefRange: 'lowland',
+    dems: demDefs(
+      'shizuoka',
+      BASE,
+      {
+        terrarium: 'shizuoka-alb-terrarium',
+        mapbox: 'shizuoka-alb-terrain-rgb',
+        gsidem: 'shizuoka-alb-dem-png',
+      },
+      RGB_EXT,
+    ),
   },
   {
-    key: 'mapbox',
-    label: 'Mapbox Terrain-RGB',
-    tileSize: 512,
-    minzoom: 5,
-    maxzoom: 17,
-    url: `${BASE}/shizuoka-alb-terrain-rgb/{z}/{x}/{y}.${RGB_EXT}`,
-  },
-  {
-    key: 'gsidem',
-    label: '数値PNG（地理院互換）',
-    tileSize: 256,
-    minzoom: 5,
-    maxzoom: 18,
-    url: `${BASE}/shizuoka-alb-dem-png/{z}/{x}/{y}.png`,
+    key: 'yamanashi',
+    label: '山梨',
+    source: '山梨県 航空レーザ測量（LP）グリッドデータ。県全域',
+    bounds: [138.1778, 35.1671, 139.1364, 35.9736],
+    reliefRange: 'all',
+    dems: demDefs(
+      'yamanashi',
+      YAMANASHI_BASE,
+      {
+        terrarium: 'yamanashi-lp-terrarium',
+        mapbox: 'yamanashi-lp-terrain-rgb',
+        gsidem: 'yamanashi-lp-dem-png',
+      },
+      'webp',
+    ),
   },
 ]
 
-export const demByKey = (key: string): DemDef =>
-  DEMS.find((d) => d.key === key) ?? DEMS[0]!
+export const regionByKey = (key: string): Region =>
+  REGIONS.find((r) => r.key === key) ?? REGIONS[0]!
+
+/** 経緯度を含む地域。どれにも入らなければ undefined。 */
+export const regionAt = (lng: number, lat: number): Region | undefined =>
+  REGIONS.find(({ bounds: [w, s, e, n] }) => lng >= w && lng <= e && lat >= s && lat <= n)
+
+export const demByKey = (region: RegionKey, key: DemKind): DemDef => {
+  const dems = regionByKey(region).dems
+  return dems.find((d) => d.key === key) ?? dems[0]!
+}
 
 /**
  * タイル URL を絶対 URL にする。
@@ -111,12 +194,23 @@ interface MaplibreLike {
   addProtocol(name: string, fn: (...args: never[]) => unknown): void
 }
 
-/** gsidem を読むための source 定義。プロトコル登録の副作用つきなので使い回す。 */
-let gsiSpec: RasterDEMSourceSpecification | null = null
-let demSource: InstanceType<typeof mlcontour.DemSource> | null = null
+/** 地域ごとの gsidem の source 定義と等高線の DemSource。プロトコル登録の副作用つきなので使い回す。 */
+const gsiSpecs = new Map<RegionKey, RasterDEMSourceSpecification>()
+const demSources = new Map<RegionKey, InstanceType<typeof mlcontour.DemSource>>()
 
 /**
- * プロトコルを登録する。地図の生成前に一度だけ呼ぶ。
+ * 等高線の間隔 [補助, 主曲線]（m）。ズームごと。
+ *
+ * 静岡は沿岸の低平地なので細かく刻む。山梨は 3,000 m 級の山地で、同じ間隔では
+ * 急斜面が線で埋まり描画も追いつかないため粗くする。
+ */
+const CONTOUR_THRESHOLDS: Record<RegionKey, Record<number, [number, number]>> = {
+  shizuoka: { 11: [50, 250], 12: [20, 100], 13: [10, 50], 14: [5, 25] },
+  yamanashi: { 11: [100, 500], 12: [50, 250], 13: [20, 100], 14: [10, 50] },
+}
+
+/**
+ * プロトコルを登録する。地図の生成前に一度だけ呼ぶ。全地域ぶんをまとめて登録する。
  *
  * 数値PNGタイルは `h = (2^16 R + 2^8 G + B) * 0.01`、ただし `x > 2^23` は
  * `(x - 2^24) * 0.01` という2の補数表現をとる。MapLibre の custom エンコーディングは
@@ -126,33 +220,45 @@ let demSource: InstanceType<typeof mlcontour.DemSource> | null = null
  * そこで maplibre-gl-gsi-terrain の `gsidem://` プロトコルで取得時にデコードし、
  * terrarium に再符号化して渡す。
  */
-export function registerDemProtocols(maplibre: MaplibreLike, gsidem: DemDef): void {
-  gsiSpec = useGsiTerrainSource(maplibre.addProtocol as never, {
-    tileUrl: absoluteTileUrl(gsidem.url),
-    minzoom: gsidem.minzoom,
-    maxzoom: gsidem.maxzoom,
-    attribution: ATTRIBUTION,
-  })
+export function registerDemProtocols(maplibre: MaplibreLike): void {
+  for (const region of REGIONS) {
+    // useGsiTerrainSource は呼ぶたびに同じ gsidem:// プロトコルを登録し直すが、処理は URL に
+    // 依らない（gsidem:// の後ろの URL を取りに行く）ので、地域ごとに呼んでも衝突しない
+    const gsidem = demByKey(region.key, 'gsidem')
+    gsiSpecs.set(
+      region.key,
+      useGsiTerrainSource(maplibre.addProtocol as never, {
+        tileUrl: absoluteTileUrl(gsidem.url),
+        minzoom: gsidem.minzoom,
+        maxzoom: gsidem.maxzoom,
+        attribution: ATTRIBUTION,
+      }),
+    )
 
-  // DemSource は DEM タイルを自前の HTTP で取るため MapLibre のプロトコルを経由できない。
-  // 等高線はどの表示を選んでいても terrarium タイルから作る。3種類とも同じ DEM が
-  // 元なので、等高線の位置は表示中のタイルと一致する。
-  const terrarium = demByKey('terrarium')
-  demSource = new mlcontour.DemSource({
-    url: absoluteTileUrl(terrarium.url),
-    encoding: 'terrarium',
-    // 深くすると等高線を細かく刻めるが、生成するセグメント数が跳ね上がり
-    // 3D地形と併用したときに描画が追いつかない。
-    maxzoom: 14,
-    worker: true,
-  })
-  demSource.setupMaplibre(maplibre as never)
+    // DemSource は DEM タイルを自前の HTTP で取るため MapLibre のプロトコルを経由できない。
+    // 等高線はどの表示を選んでいても terrarium タイルから作る。3種類とも同じ DEM が
+    // 元なので、等高線の位置は表示中のタイルと一致する。
+    const terrarium = demByKey(region.key, 'terrarium')
+    const src = new mlcontour.DemSource({
+      url: absoluteTileUrl(terrarium.url),
+      encoding: 'terrarium',
+      // プロトコル名の接頭辞。地域ごとに分けないと後から登録した方に上書きされる
+      id: `dem-${region.key}`,
+      // 深くすると等高線を細かく刻めるが、生成するセグメント数が跳ね上がり
+      // 3D地形と併用したときに描画が追いつかない。
+      maxzoom: 14,
+      worker: true,
+    })
+    src.setupMaplibre(maplibre as never)
+    demSources.set(region.key, src)
+  }
 }
 
 export function demSourceSpec(dem: DemDef): RasterDEMSourceSpecification {
   if (dem.key === 'gsidem') {
-    if (!gsiSpec) throw new Error('registerDemProtocols() を先に呼ぶこと')
-    return gsiSpec
+    const spec = gsiSpecs.get(dem.region)
+    if (!spec) throw new Error('registerDemProtocols() を先に呼ぶこと')
+    return spec
   }
   return {
     type: 'raster-dem',
@@ -165,19 +271,14 @@ export function demSourceSpec(dem: DemDef): RasterDEMSourceSpecification {
   }
 }
 
-export function contourSourceSpec(): VectorSourceSpecification {
-  if (!demSource) throw new Error('registerDemProtocols() を先に呼ぶこと')
+export function contourSourceSpec(region: RegionKey): VectorSourceSpecification {
+  const src = demSources.get(region)
+  if (!src) throw new Error('registerDemProtocols() を先に呼ぶこと')
   return {
     type: 'vector',
     tiles: [
-      demSource.contourProtocolUrl({
-        // [補助間隔, 主曲線間隔]（m）。沿岸の低平地が対象なので上流サンプルより細かい。
-        thresholds: {
-          11: [50, 250],
-          12: [20, 100],
-          13: [10, 50],
-          14: [5, 25],
-        },
+      src.contourProtocolUrl({
+        thresholds: CONTOUR_THRESHOLDS[region],
         elevationKey: 'ele',
         levelKey: 'level',
         contourLayer: 'contours',

@@ -28,7 +28,23 @@ npm run dev
 
 ## タイルの配信元
 
-URL は配信側（R2）のキー名で組む。dem2tiles の出力ディレクトリ名とは違うが、名前を
+地域はパネルの「地域」で切り替える。URL の `#ズーム/緯度/経度` がどちらかの範囲を指していれば、
+開いたときにその地域を選ぶ。
+
+| 地域 | 元データ | 配信 |
+| --- | --- | --- |
+| 静岡 | 航空レーザ測深（ALB）。沿岸部のみ | R2 に ZXY で置き、`shi-works.com/raster-tiles/pref-shizuoka/` から直接 |
+| 山梨 | 航空レーザ測量（LP）グリッドデータ。県全域 | R2 に PMTiles で置き、Worker（`../worker/`）が `tiles.shi-works.com/pref-yamanashi/` で ZXY に変換 |
+
+```
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrarium/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrain-rgb/{z}/{x}/{y}.webp
+https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-dem-png/{z}/{x}/{y}.png
+```
+
+山梨は dev でも本番の Worker を読む（`VITE_YAMANASHI_TILES_BASE` で差し替え可）。以下は静岡の話。
+
+静岡の URL は配信側（R2）のキー名で組む。dem2tiles の出力ディレクトリ名とは違うが、名前を
 2系統持つと URL の組み立てが環境変数で分岐してしまうため、コードは配信キー名に統一し、
 dev サーバ側で実体へ読み替える（`vite.config.ts` の `KEY_TO_DIR`）。
 
