@@ -50,6 +50,27 @@ body {
   inset: 0;
 }
 
+/* 画面中心の十字。段彩の下限を決めるための「中心の標高」の位置 */
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--ink), var(--ink)) center / 2px 100% no-repeat,
+    linear-gradient(var(--ink), var(--ink)) center / 100% 2px no-repeat;
+  opacity: 0.6;
+  filter: drop-shadow(0 0 1px #fff);
+}
+
+.crosshair[hidden] {
+  display: none;
+}
+
 /* ---- パネル ---- */
 .panel {
   position: absolute;
@@ -413,6 +434,45 @@ body {
   flex: 1;
   min-width: 0;
   width: auto;
+}
+
+/* 段彩の下限。数値入力と「画面に合わせる」を 1 行に並べる */
+.num-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 4px 6px;
+  text-align: right;
+}
+
+.slider-row > .unit {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.btn-sm {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-sm:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.btn-sm:disabled,
+.num-input:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 #hillshade-opts .select {
@@ -947,6 +1007,12 @@ body {
 .readout b {
   color: var(--ink);
   font-weight: 600;
+}
+
+.elev-readout {
+  display: flex;
+  gap: 14px;
+  margin: 2px 0 4px;
 }
 
 .tile-url {
