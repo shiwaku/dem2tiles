@@ -39,6 +39,9 @@ import {
   reliefTickEvery,
   registerReliefProtocol,
   type ReliefRange,
+  elevationAt,
+  viewElevationStats,
+  withBase,
 } from './relief'
 import { applyThemeAttr, initialTheme, type Theme } from './theme'
 
@@ -73,6 +76,10 @@ let base: Basemap = 'pale'
 let reliefOn = true
 let reliefOpacity = DEFAULT_RELIEF_OPACITY
 let reliefRange: ReliefRange = reliefRangeByKey(region.reliefRange)
+/** 'linear' レンジの下限（m）。幅と刻みは reliefRange が持つ。 */
+let reliefBase = 0
+/** 実際に塗るレンジ。 */
+const effectiveRelief = (): ReliefRange => withBase(reliefRange, reliefBase)
 let hillshadeOn = true
 let hillshadeMethod: HillshadeMethod = DEFAULT_HILLSHADE_METHOD
 let hillshadeExag = HILLSHADE_PRESETS[DEFAULT_HILLSHADE_METHOD].exaggeration
@@ -198,7 +205,7 @@ function applyRelief(): void {
     removeSource(RELIEF_SOURCE)
     return
   }
-  if (!map.getSource(RELIEF_SOURCE)) map.addSource(RELIEF_SOURCE, reliefSourceSpec(reliefRange, region.key))
+  if (!map.getSource(RELIEF_SOURCE)) map.addSource(RELIEF_SOURCE, reliefSourceSpec(effectiveRelief(), region.key))
   map.addLayer(reliefLayer(reliefOpacity), beforeIdFor('relief'))
 }
 
@@ -287,7 +294,7 @@ regionModesEl.replaceChildren(
       dem = demByKey(region.key, demKind)
       reliefRange = reliefRangeByKey(region.reliefRange)
       reliefRangeEl.value = reliefRange.key
-      buildReliefLegend()
+      setReliefBase(0, '')
       syncRegion()
       map.fitBounds(region.bounds, { padding: 40, duration: 0 })
       void reloadStyle()
@@ -328,10 +335,55 @@ const reliefOpacityEl = el<HTMLInputElement>('relief-opacity')
 const reliefOpacityValEl = el('relief-opacity-val')
 const reliefLegendEl = el('relief-legend')
 const reliefRangeEl = el<HTMLSelectElement>('relief-range')
+const reliefBaseEl = el<HTMLInputElement>('relief-base')
+const reliefFitEl = el<HTMLButtonElement>('relief-fit')
+const reliefFitNoteEl = el('relief-fit-note')
+const elevCenterEl = el('elev-center')
+const elevCursorEl = el('elev-cursor')
+const crosshairEl = el('crosshair')
+
+// ---- 標高の読み取り ----
+// 下限を手で入れるには、見ている場所の標高が分からないと決めようがない。
+// 段彩と同じ数値PNGの画素値を出す（地図のズーム + 1 の段なので z15 で約 2.4m/画素）。
+
+const fmtElev = (h: number | null): string => (h === null ? 'データなし' : `${h.toFixed(2)}m`)
+
+/**
+ * 非同期の読み取りを、最後に頼んだものだけ表示する。
+ * mousemove は速く、先に頼んだタイルの読み込みが後から返ると古い値で上書きされる。
+ */
+function latestOnly(target: HTMLElement): (job: Promise<number | null>) => void {
+  let seq = 0
+  return (job) => {
+    const mine = ++seq
+    void job.then((h) => {
+      if (mine === seq) target.textContent = fmtElev(h)
+    })
+  }
+}
+
+const showCenter = latestOnly(elevCenterEl)
+const showCursor = latestOnly(elevCursorEl)
+
+function updateCenterElevation(): void {
+  const c = map.getCenter()
+  showCenter(elevationAt(region.key, c.lng, c.lat, map.getZoom()))
+}
+
+map.on('moveend', updateCenterElevation)
+// タイルは地図の描画と別に取るので、'load' を待たずに引ける
+updateCenterElevation()
+map.on('mousemove', (e) => {
+  showCursor(elevationAt(region.key, e.lngLat.lng, e.lngLat.lat, map.getZoom()))
+})
+map.getCanvas().addEventListener('mouseleave', () => {
+  elevCursorEl.textContent = '–'
+})
 
 reliefOnEl.addEventListener('change', () => {
   reliefOn = reliefOnEl.checked
   reliefOptsEl.hidden = !reliefOn
+  crosshairEl.hidden = !reliefOn
   applyRelief()
 })
 
@@ -344,12 +396,66 @@ for (const r of RELIEF_RANGES) {
 reliefRangeEl.value = reliefRange.key
 reliefRangeEl.addEventListener('change', () => {
   reliefRange = reliefRangeByKey(reliefRangeEl.value)
+  refreshRelief()
+})
+
+/** レンジか下限を変えたあとに、凡例と段彩タイルを作り直す。 */
+function refreshRelief(): void {
+  const abs = reliefRange.mode === 'abs'
+  reliefBaseEl.disabled = abs
+  reliefFitEl.disabled = abs
+  reliefBaseEl.step = String(reliefRange.step ?? 1)
   buildReliefLegend()
   // レンジはタイルURLに入っている。ソースを差し替えないと、MapLibre が
   // URL単位で持っている古い色のタイルがそのまま残る。
   removeLayer(RELIEF_ID)
   removeSource(RELIEF_SOURCE)
   applyRelief()
+}
+
+function setReliefBase(base: number, note: string): void {
+  reliefBase = base
+  reliefBaseEl.value = String(base)
+  reliefFitNoteEl.textContent = note
+  refreshRelief()
+}
+
+reliefBaseEl.addEventListener('change', () => {
+  const v = Number(reliefBaseEl.value)
+  if (Number.isFinite(v)) setReliefBase(v, '')
+  else reliefBaseEl.value = String(reliefBase)
+})
+
+/**
+ * 下限を画面内の標高に合わせる。下から 2% の標高を刻みで切り下げて下限にする。
+ *
+ * 最小値にしないのは、河道の底や水路の数画素で下限が引き下げられ、
+ * 見たい面が上の方の数段に寄ってしまうため。それより低い所は最下段の色で塗られる。
+ */
+reliefFitEl.addEventListener('click', async () => {
+  const b = map.getBounds()
+  reliefFitEl.disabled = true
+  reliefFitNoteEl.textContent = '画面内の標高を読んでいます…'
+  try {
+    const stats = await viewElevationStats(
+      region.key,
+      [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+      map.getZoom(),
+    )
+    if (!stats) {
+      reliefFitNoteEl.textContent = '画面内に標高データがありません。'
+      return
+    }
+    const step = reliefRange.step ?? 1
+    const base = Number((Math.floor(stats.lo / step) * step).toFixed(6))
+    const width = reliefRange.max - reliefRange.min
+    const f = (v: number): string => v.toFixed(1)
+    let note = `画面内の標高 ${f(stats.lo)}〜${f(stats.hi)}m（下から2〜98%）。`
+    if (stats.hi > base + width) note += `幅 ${width}m を超える高い所は最上段の色になる。`
+    setReliefBase(base, note)
+  } finally {
+    reliefFitEl.disabled = reliefRange.mode === 'abs'
+  }
 })
 
 reliefOpacityEl.addEventListener('input', () => {
@@ -366,7 +472,8 @@ reliefOpacityEl.addEventListener('input', () => {
  * 等幅がそのまま実際の間隔になる。どちらでも実際の境界は目盛りの数字が示す。
  */
 function buildReliefLegend(): void {
-  const legend = reliefLegend(reliefRange)
+  const range = effectiveRelief()
+  const legend = reliefLegend(range)
   // 刻みの桁で丸めたうえで末尾の 0 は落とす（0.5m 刻みでも整数の目盛りは「1」と出す）
   const fmt = (v: number): string => String(Number(v.toFixed(reliefDecimals(reliefRange))))
 
@@ -400,6 +507,8 @@ function buildReliefLegend(): void {
   reliefLegendEl.replaceChildren(bar, ticks, unit)
 }
 buildReliefLegend()
+reliefBaseEl.disabled = reliefFitEl.disabled = reliefRange.mode === 'abs'
+reliefBaseEl.step = String(reliefRange.step ?? 1)
 
 const hillshadeOnEl = el<HTMLInputElement>('hillshade-on')
 const hillshadeOptsEl = el('hillshade-opts')

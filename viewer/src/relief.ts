@@ -75,13 +75,27 @@ export interface ReliefRange {
  * 刻みを先に決めれば、凡例の目盛りが 0, 0.5, 1.0… とそろう。
  */
 // 刻み幅はセレクトの名前に入れない（幅に収まらず末尾が切れる）。凡例の横の「1段 0.5m」が示す。
+// 'linear' の min / max は下限 0m のときの値。実際の下限は withBase で動かす（名前は幅で書く）。
 export const RELIEF_RANGES: ReliefRange[] = [
   { key: 'all', label: '全国（地形図の絶対標高）', mode: 'abs', min: -10, max: 4000 },
-  { key: 'mountain', label: '山地 0〜1000m', mode: 'linear', min: 0, max: 1000, step: 50 },
-  { key: 'plain', label: '平野 0〜100m', mode: 'linear', min: 0, max: 100, step: 5 },
-  { key: 'lowland', label: '低地 0〜20m', mode: 'linear', min: 0, max: 20, step: 1 },
-  { key: 'micro', label: '微地形 0〜5m（窪地）', mode: 'linear', min: 0, max: 5, step: 0.5 },
+  { key: 'mountain', label: '山地 幅1000m', mode: 'linear', min: 0, max: 1000, step: 50 },
+  { key: 'plain', label: '平野 幅100m', mode: 'linear', min: 0, max: 100, step: 5 },
+  { key: 'lowland', label: '低地 幅20m', mode: 'linear', min: 0, max: 20, step: 1 },
+  { key: 'micro', label: '微地形 幅5m（窪地）', mode: 'linear', min: 0, max: 5, step: 0.5 },
 ]
+
+/**
+ * 'linear' のレンジを、幅と刻みはそのままに下限 base から始まるようにずらす。
+ *
+ * 下限が 0m 固定だと、海から離れた低地（甲府盆地は 250〜400m）ではどの幅を選んでも
+ * 全域が上限を超えて一色になる。内水の判読で見たいのは周囲との相対的な高低なので、
+ * 幅（何 m の起伏を色で分けるか）と下限（どの標高から数えるか）を分けて持つ。
+ */
+export function withBase(range: ReliefRange, base: number): ReliefRange {
+  if (range.mode === 'abs') return range
+  const width = range.max - range.min
+  return { ...range, min: base, max: Number((base + width).toFixed(6)) }
+}
 
 export const DEFAULT_RELIEF_RANGE = RELIEF_RANGES[3]!
 
@@ -277,6 +291,164 @@ export function registerReliefProtocol(maplibre: MaplibreLike): void {
     if (!res.ok) return { data: null }
     return { data: await colorize(await res.arrayBuffer(), range) }
   }) as never)
+}
+
+/** 画面内の標高の分布。外れ値（河道の底や構造物）を除くため、両端は分位点で持つ。 */
+export interface ElevationStats {
+  /** 下から 2% の標高（m）。 */
+  lo: number
+  /** 下から 98% の標高（m）。 */
+  hi: number
+  /** 数えた画素数。 */
+  count: number
+}
+
+/** 画面内の標高を数えるのに取るタイルの上限。超えるならズームを下げる。 */
+const STATS_MAX_TILES = 36
+/** 1 タイルから読む画素の間引き（縦横とも何画素おきか）。256px なら 64×64 点。 */
+const STATS_STRIDE = 4
+
+const lngToX = (lng: number, n: number): number => ((lng + 180) / 360) * n
+const latToY = (lat: number, n: number): number => {
+  const r = (lat * Math.PI) / 180
+  return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n
+}
+
+/** 標高を読むズーム。段彩のタイルと同じ段（256px なので地図のズーム + 1）にそろえる。 */
+function readZoom(region: RegionKey, mapZoom: number): number {
+  const src = demByKey(region, 'gsidem')
+  return Math.max(src.minzoom, Math.min(Math.floor(mapZoom) + 1, RELIEF_MAX_ZOOM))
+}
+
+function tileUrl(region: RegionKey, z: number, x: number, y: number): string {
+  return absoluteTileUrl(demByKey(region, 'gsidem').url)
+    .replace('{z}', String(z))
+    .replace('{x}', String(x))
+    .replace('{y}', String(y))
+}
+
+/** 数値PNGを標高（m）の配列にしたもの。NA は NaN。 */
+interface DecodedTile {
+  size: number
+  h: Float32Array
+}
+
+/**
+ * デコード済みタイルのキャッシュ。カーソルの標高は mousemove ごとに引くので、
+ * 同じタイルを毎回デコードしないようにする。256px で 1 枚 256KB、上限 64 枚。
+ */
+const TILE_CACHE_MAX = 64
+const tileCache = new Map<string, Promise<DecodedTile | null>>()
+
+function decodedTile(url: string): Promise<DecodedTile | null> {
+  const hit = tileCache.get(url)
+  if (hit) {
+    // 最近使ったものを末尾へ（Map は挿入順なので先頭から捨てれば LRU になる）
+    tileCache.delete(url)
+    tileCache.set(url, hit)
+    return hit
+  }
+  const job = (async (): Promise<DecodedTile | null> => {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const bitmap = await createImageBitmap(await res.blob())
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+    ctx.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    const h = new Float32Array(canvas.width * canvas.height)
+    const NA = 0x800000
+    for (let i = 0, k = 0; i < h.length; i++, k += 4) {
+      const v = (d[k]! << 16) | (d[k + 1]! << 8) | d[k + 2]!
+      h[i] = v === NA ? NaN : (v < NA ? v : v - 0x1000000) * GSI_U
+    }
+    return { size: canvas.width, h }
+  })().catch(() => null)
+  tileCache.set(url, job)
+  if (tileCache.size > TILE_CACHE_MAX) tileCache.delete(tileCache.keys().next().value!)
+  return job
+}
+
+/**
+ * 経緯度の標高（m）。段彩と同じ数値PNGタイルの画素値をそのまま返す。
+ * 無データやタイルの範囲外は null。
+ */
+export async function elevationAt(
+  region: RegionKey,
+  lng: number,
+  lat: number,
+  mapZoom: number,
+): Promise<number | null> {
+  const z = readZoom(region, mapZoom)
+  const n = 2 ** z
+  const fx = lngToX(lng, n)
+  const fy = latToY(lat, n)
+  const x = Math.floor(fx)
+  const y = Math.floor(fy)
+  const t = await decodedTile(tileUrl(region, z, x, y))
+  if (!t) return null
+  const i = Math.min(t.size - 1, Math.floor((fx - x) * t.size))
+  const j = Math.min(t.size - 1, Math.floor((fy - y) * t.size))
+  const h = t.h[j * t.size + i]!
+  return Number.isNaN(h) ? null : h
+}
+
+/**
+ * 画面の範囲 [西, 南, 東, 北] にある標高の分布を、段彩と同じ数値PNGタイルから数える。
+ * 段彩の下限を「今見ている場所」に合わせるのに使う。NA は数えない。データが無ければ null。
+ */
+export async function viewElevationStats(
+  region: RegionKey,
+  bounds: [number, number, number, number],
+  mapZoom: number,
+): Promise<ElevationStats | null> {
+  const minzoom = demByKey(region, 'gsidem').minzoom
+  const [w, s, e, n] = bounds
+  let z = readZoom(region, mapZoom)
+  // タイル単位の範囲。広すぎるならズームを下げて枚数を抑える。
+  let x0: number, x1: number, y0: number, y1: number
+  for (;;) {
+    const size = 2 ** z
+    x0 = Math.floor(lngToX(w, size))
+    x1 = Math.floor(lngToX(e, size))
+    y0 = Math.floor(latToY(n, size))
+    y1 = Math.floor(latToY(s, size))
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) <= STATS_MAX_TILES || z <= minzoom) break
+    z--
+  }
+  const size = 2 ** z
+
+  const jobs: Promise<number[]>[] = []
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      jobs.push(
+        decodedTile(tileUrl(region, z, x, y)).then((t) => {
+          if (!t) return []
+          // 画面の範囲を、このタイルの画素座標で
+          const i0 = (lngToX(w, size) - x) * t.size
+          const i1 = (lngToX(e, size) - x) * t.size
+          const j0 = (latToY(n, size) - y) * t.size
+          const j1 = (latToY(s, size) - y) * t.size
+          const out: number[] = []
+          for (let j = 0; j < t.size; j += STATS_STRIDE) {
+            if (j < j0 || j > j1) continue
+            for (let i = 0; i < t.size; i += STATS_STRIDE) {
+              if (i < i0 || i > i1) continue
+              const h = t.h[j * t.size + i]!
+              if (!Number.isNaN(h)) out.push(h)
+            }
+          }
+          return out
+        }),
+      )
+    }
+  }
+  const values = (await Promise.all(jobs)).flat()
+  if (values.length === 0) return null
+  values.sort((a, b) => a - b)
+  const at = (p: number): number => values[Math.min(values.length - 1, Math.floor(p * values.length))]!
+  return { lo: at(0.02), hi: at(0.98), count: values.length }
 }
 
 export function reliefSourceSpec(range: ReliefRange, region: RegionKey): RasterSourceSpecification {

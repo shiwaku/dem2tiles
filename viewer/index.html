@@ -9,6 +9,8 @@
 </head>
 <body>
   <div id="map"></div>
+  <!-- 「中心の標高」がどこを指すかを示す -->
+  <div id="crosshair" class="crosshair" aria-hidden="true"></div>
 
   <section id="panel" class="panel" aria-label="コントロールパネル">
     <header class="panel-head">
@@ -62,13 +64,24 @@
             <label for="relief-range">標高レンジ</label>
             <select id="relief-range" class="select select-inline" aria-label="段彩の標高レンジ"></select>
           </div>
+          <div id="relief-base-row" class="slider-row">
+            <label for="relief-base">下限</label>
+            <input id="relief-base" type="number" class="select num-input" step="1" value="0" inputmode="decimal" />
+            <span class="unit">m</span>
+            <button id="relief-fit" type="button" class="btn-sm">画面に合わせる</button>
+          </div>
+          <div class="readout elev-readout" aria-live="off">
+            <div>中心（＋）<b id="elev-center">–</b></div>
+            <div>カーソル <b id="elev-cursor">–</b></div>
+          </div>
+          <p id="relief-fit-note" class="note" aria-live="polite"></p>
           <div class="slider-row">
             <label for="relief-opacity">不透明度</label>
             <input id="relief-opacity" type="range" min="0.1" max="1" step="0.05" value="0.55" />
             <span id="relief-opacity-val" class="op-val">55%</span>
           </div>
           <div id="relief-legend" class="relief-legend" aria-label="標高の凡例"></div>
-          <p class="note">段彩は数値PNGタイルから作り、無データ（NA）は透明にする。レンジを狭めると色が引き伸ばされ、細かな起伏が読める。</p>
+          <p class="note">段彩は数値PNGタイルから作り、無データ（NA）は透明にする。レンジを狭めると色が引き伸ばされ、細かな起伏が読める。内陸の盆地では下限をその場の標高に合わせる。</p>
         </div>
 
         <label class="toggle">
