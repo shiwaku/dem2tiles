@@ -14,6 +14,11 @@ MIN_ZOOM="${MIN_ZOOM:-5}"
 RGB_MAX_ZOOM="${RGB_MAX_ZOOM:-auto}"
 GSIDEM_MIN_ZOOM="${GSIDEM_MIN_ZOOM:-$MIN_ZOOM}"
 GSIDEM_MAX_ZOOM="${GSIDEM_MAX_ZOOM:-auto}"
+# Tile size in pixels, 256 or 512, for each kind of tile set. The defaults are
+# what each kind is usually served at: Terrain-RGB / Terrarium at 512, as
+# Mapbox and Mapterhorn do, and gsidem at 256, as the GSI elevation tiles are.
+RGB_TILE_SIZE="${RGB_TILE_SIZE:-512}"
+GSIDEM_TILE_SIZE="${GSIDEM_TILE_SIZE:-256}"
 # Nodata handling. SRC_NODATA is only needed when the input GeoTIFFs do not
 # carry a nodata value themselves; leave empty to use the embedded one.
 SRC_NODATA="${SRC_NODATA:-}"
@@ -96,6 +101,16 @@ case "$TILE_FORMAT" in
         exit 1
         ;;
 esac
+
+for v in RGB_TILE_SIZE GSIDEM_TILE_SIZE; do
+    case "${!v}" in
+        256|512) ;;
+        *)
+            echo "[dem2tiles] ERROR: $v must be 256 or 512, got '${!v}'" >&2
+            exit 1
+            ;;
+    esac
+done
 
 want() {
     [[ " ${OUTPUTS//,/ } " == *" $1 "* ]]
@@ -209,17 +224,20 @@ eval "$PROBE_OUT"
 [ -z "${VRT_BUILT:-}" ] || step_done vrt "$VRT_FP"
 log "source CRS: ${SRC_SRS:-unknown}, pixel size: ${NATIVE_RES_M} m, centre latitude: ${CENTRE_LAT}"
 
-# The two tile sets resolve the same grid at different zooms, because
-# rio-rgbify and rio-terrarium render 512 px tiles while gdal2NPtiles renders
-# 256 px ones. Using the 256 px answer for both asks the RGB tilers for four
-# times as many tiles, each oversampled twice over.
+# The zoom that resolves the grid depends on the tile size: a 512 px tile
+# reaches it a zoom level before a 256 px one. Using the 256 px answer for
+# 512 px tiles asks for four times as many tiles, each oversampled twice over.
+native_zoom() {
+    local v="NATIVE_ZOOM_$1"
+    echo "${!v}"
+}
 if [ "$RGB_MAX_ZOOM" = "auto" ]; then
-    RGB_MAX_ZOOM="$NATIVE_ZOOM_512"
-    log "RGB_MAX_ZOOM=auto -> $RGB_MAX_ZOOM (512 px tiles)"
+    RGB_MAX_ZOOM=$(native_zoom "$RGB_TILE_SIZE")
+    log "RGB_MAX_ZOOM=auto -> $RGB_MAX_ZOOM ($RGB_TILE_SIZE px tiles)"
 fi
 if [ "$GSIDEM_MAX_ZOOM" = "auto" ]; then
-    GSIDEM_MAX_ZOOM="$NATIVE_ZOOM_256"
-    log "GSIDEM_MAX_ZOOM=auto -> $GSIDEM_MAX_ZOOM (256 px tiles)"
+    GSIDEM_MAX_ZOOM=$(native_zoom "$GSIDEM_TILE_SIZE")
+    log "GSIDEM_MAX_ZOOM=auto -> $GSIDEM_MAX_ZOOM ($GSIDEM_TILE_SIZE px tiles)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -297,7 +315,7 @@ fi
 # ---------------------------------------------------------------------------
 # Mapbox Terrain-RGB
 # ---------------------------------------------------------------------------
-MAPBOX_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT")
+MAPBOX_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$RGBIFY_BASE" "$RGBIFY_INTERVAL" "$TILE_FORMAT" "$RGB_TILE_SIZE")
 
 if want mapbox; then
     if step_current mapbox "$MAPBOX_FP" "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"; then
@@ -306,12 +324,12 @@ if want mapbox; then
         # mb-util refuses to write into a directory that already exists, so the
         # previous attempt has to go before this one starts.
         step_begin mapbox "$OUTPUT_DIR/mapbox.mbtiles" "$OUTPUT_DIR/mapbox"
-        log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
+        log "building mapbox tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT, $RGB_TILE_SIZE px)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding mapbox \
             --src "$RGB_SRC" --dst mapbox.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
             --base-val "$RGBIFY_BASE" --interval "$RGBIFY_INTERVAL" \
-            --workers "$JOBS"
+            --tile-size "$RGB_TILE_SIZE" --workers "$JOBS"
         mb-util --image_format="$TILE_FORMAT" mapbox.mbtiles "$OUTPUT_DIR/mapbox"
         step_done mapbox "$MAPBOX_FP"
     fi
@@ -320,18 +338,18 @@ fi
 # ---------------------------------------------------------------------------
 # Terrarium
 # ---------------------------------------------------------------------------
-TERRARIUM_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT")
+TERRARIUM_FP=$(fingerprint "$OVERVIEW_FP" "$DST_NODATA" alpha "$MIN_ZOOM" "$RGB_MAX_ZOOM" "$TILE_FORMAT" "$RGB_TILE_SIZE")
 
 if want terrarium; then
     if step_current terrarium "$TERRARIUM_FP" "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"; then
         log "terrarium tiles are up to date, skipping"
     else
         step_begin terrarium "$OUTPUT_DIR/terrarium.mbtiles" "$OUTPUT_DIR/terrarium"
-        log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT)"
+        log "building terrarium tiles (z$MIN_ZOOM-$RGB_MAX_ZOOM, $TILE_FORMAT, $RGB_TILE_SIZE px)"
         /opt/rio/bin/python /usr/local/bin/tile_driver.py --encoding terrarium \
             --src "$RGB_SRC" --dst terrarium.mbtiles --vrt "$VRT" \
             --min-z "$MIN_ZOOM" --max-z "$RGB_MAX_ZOOM" --format "$TILE_FORMAT" \
-            --workers "$JOBS"
+            --tile-size "$RGB_TILE_SIZE" --workers "$JOBS"
         mb-util --image_format="$TILE_FORMAT" terrarium.mbtiles "$OUTPUT_DIR/terrarium"
         step_done terrarium "$TERRARIUM_FP"
     fi
@@ -340,17 +358,18 @@ fi
 # ---------------------------------------------------------------------------
 # GSI numerical DEM tiles (nodata preserved)
 # ---------------------------------------------------------------------------
-GSIDEM_FP=$(fingerprint "$MERGE_FP" "$GSIDEM_MIN_ZOOM" "$GSIDEM_MAX_ZOOM" "$DST_NODATA" "$GSIDEM_RESOLUTION")
+GSIDEM_FP=$(fingerprint "$MERGE_FP" "$GSIDEM_MIN_ZOOM" "$GSIDEM_MAX_ZOOM" "$DST_NODATA" "$GSIDEM_RESOLUTION" "$GSIDEM_TILE_SIZE")
 
 if want gsidem; then
     if step_current gsidem "$GSIDEM_FP" "$OUTPUT_DIR/gsidem"; then
         log "gsidem tiles are up to date, skipping"
     else
         step_begin gsidem "$OUTPUT_DIR/gsidem"
-        log "building gsidem tiles (z$GSIDEM_MIN_ZOOM-$GSIDEM_MAX_ZOOM)"
+        log "building gsidem tiles (z$GSIDEM_MIN_ZOOM-$GSIDEM_MAX_ZOOM, $GSIDEM_TILE_SIZE px)"
         /usr/bin/python3 /usr/local/bin/gdal2NPtiles.py --numerical \
             --numerical-resolution "$GSIDEM_RESOLUTION" \
             --processes="$JOBS" --xyz -a "$DST_NODATA" \
+            --tilesize="$GSIDEM_TILE_SIZE" \
             -z "$GSIDEM_MIN_ZOOM-$GSIDEM_MAX_ZOOM" \
             "$MERGED" "$OUTPUT_DIR/gsidem"
         step_done gsidem "$GSIDEM_FP"

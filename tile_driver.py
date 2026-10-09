@@ -102,6 +102,7 @@ def coverage_tiles(vrt_path, min_z, max_z):
 # ---------------------------------------------------------------------------
 _mbtiler = None
 _image_format = "png"
+_tile_size = 512
 _datasets = {}
 _factors = []
 
@@ -126,7 +127,7 @@ def _pick_level(bounds):
         return None
     left, bottom, right, top = transform_bounds(
         "EPSG:3857", src.crs, *bounds, densify_pts=21)
-    tile_res = min((right - left) / 512, (top - bottom) / 512)
+    tile_res = min((right - left) / _tile_size, (top - bottom) / _tile_size)
     src_res = max(abs(src.res[0]), abs(src.res[1]))
     level = None
     for i, factor in enumerate(_factors):
@@ -136,7 +137,7 @@ def _pick_level(bounds):
 
 
 def _encode(rgba, image_format):
-    """RGBA (4, 512, 512) uint8 -> PNG or lossless WebP bytes.
+    """RGBA (4, size, size) uint8 -> PNG or lossless WebP bytes.
 
     exact=True keeps the RGB under fully transparent pixels. libwebp otherwise
     rewrites it to whatever compresses best, and a client that ignores alpha
@@ -161,11 +162,11 @@ def overview_tile_worker(tile):
         )
         for c in i
     ]
-    toaffine = transform.from_bounds(*bounds + [512, 512])
+    toaffine = transform.from_bounds(*bounds + [_tile_size, _tile_size])
 
     src = _open_level(_pick_level(bounds))
     nodata = src.nodata
-    out = np.full((512, 512), nodata if nodata is not None else 0,
+    out = np.full((_tile_size, _tile_size), nodata if nodata is not None else 0,
                   dtype=src.meta["dtype"])
     # The source keeps its nodata, so the warp leaves nodata where no valid
     # pixel reaches and interpolates from the valid ones only. Edges no longer
@@ -179,7 +180,7 @@ def overview_tile_worker(tile):
         resampling=Resampling.bilinear,
     )
     if nodata is None:
-        alpha = np.full((512, 512), 255, dtype=np.uint8)
+        alpha = np.full((_tile_size, _tile_size), 255, dtype=np.uint8)
     else:
         alpha = np.where(out == nodata, 0, 255).astype(np.uint8)
         # The footprints are the inputs' bounding boxes, so some tiles in the
@@ -197,7 +198,7 @@ def overview_tile_worker(tile):
 
 
 def main():
-    global _mbtiler, _image_format
+    global _mbtiler, _image_format, _tile_size
     ap = argparse.ArgumentParser()
     ap.add_argument("--encoding", choices=("mapbox", "terrarium"), required=True)
     ap.add_argument("--src", required=True, help="raster to encode, with its nodata")
@@ -207,6 +208,9 @@ def main():
     ap.add_argument("--max-z", type=int, required=True)
     ap.add_argument("--format", choices=("png", "webp"), default="png")
     ap.add_argument("--workers", type=int, default=4)
+    # The tile is rendered here, not by rio-rgbify / rio-terrarium, so their
+    # 512 px is only a default. Any power of two works for the XYZ grid.
+    ap.add_argument("--tile-size", type=int, default=512)
     ap.add_argument("--base-val", type=float, default=-10000.0)
     ap.add_argument("--interval", type=float, default=0.1)
     args = ap.parse_args()
@@ -246,13 +250,14 @@ def main():
     # forked, so the module reference set here is inherited.
     _mbtiler = mbtiler
     _image_format = args.format
+    _tile_size = args.tile_size
     tiler.run_function = overview_tile_worker
     with rasterio.open(args.src) as src:
         levels = src.overviews(1)
     print(f"tile_driver: source overviews {levels or 'none'}", flush=True)
 
     print(f"tile_driver: {len(keep)} tile(s) intersect the inputs "
-          f"(z{args.min_z}-{args.max_z})", flush=True)
+          f"(z{args.min_z}-{args.max_z}, {_tile_size} px)", flush=True)
 
     with tiler as t:
         t.run(args.workers)

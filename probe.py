@@ -122,8 +122,7 @@ def main():
     print(f"SRC_SRS={key if key.startswith('EPSG:') else ''}")
     print(f"NATIVE_RES_M={res_m:.6f}")
     print(f"CENTRE_LAT={lat:.6f}")
-    # One per tile size, because the tilers disagree: rio-rgbify and
-    # rio-terrarium render 512 px tiles, gdal2NPtiles renders 256 px ones.
+    # One per tile size: RGB_TILE_SIZE and GSIDEM_TILE_SIZE pick from these.
     print(f"NATIVE_ZOOM_256={matching_zoom(res_m, lat, 256)}")
     print(f"NATIVE_ZOOM_512={matching_zoom(res_m, lat, 512)}")
 
