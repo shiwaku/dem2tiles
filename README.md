@@ -7,14 +7,15 @@ DEM の GeoTIFF を標高タイルに変換する。
 
 入力ディレクトリの GeoTIFF をまとめて、3種類のタイルを出力する。
 
-| 出力 | 形式 | タイルサイズ | 出力先 |
+| 出力 | 形式 | タイルサイズ（既定） | 出力先 |
 | --- | --- | --- | --- |
 | Mapbox Terrain-RGB | PNG / WebP（`mbtiles` と展開済みディレクトリ） | 512 | `output/mapbox` |
 | Terrarium | PNG / WebP（`mbtiles` と展開済みディレクトリ） | 512 | `output/terrarium` |
 | 地理院標高タイル | PNG（数値PNGタイル） | 256 | `output/gsidem` |
 
-タイルサイズが揃っていないのは意図的。地理院標高タイル（PNG形式）の仕様が
-256x256 のため。
+既定のタイルサイズが揃っていないのは意図的。地理院標高タイル（PNG形式）の仕様が
+256x256 のため。どちらも `RGB_TILE_SIZE` / `GSIDEM_TILE_SIZE` で 256 か 512 に変えられる
+（後述「タイルサイズ」）。
 
 RGB 系2種の形式は `TILE_FORMAT` で選ぶ（既定 `webp`、後述）。
 
@@ -81,6 +82,8 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 | `RGB_MAX_ZOOM` | `auto` | Terrain-RGB / Terrarium の最大ズーム |
 | `GSIDEM_MIN_ZOOM` | `$MIN_ZOOM` | 地理院標高タイルの最小ズーム |
 | `GSIDEM_MAX_ZOOM` | `auto` | 地理院標高タイルの最大ズーム |
+| `RGB_TILE_SIZE` | `512` | Terrain-RGB / Terrarium のタイルサイズ（`256` / `512`） |
+| `GSIDEM_TILE_SIZE` | `256` | 地理院標高タイルのタイルサイズ（`256` / `512`） |
 | `SRC_NODATA` | *(なし)* | 入力の NoData 値を上書き。空なら GeoTIFF 埋め込み値を使う |
 | `DST_NODATA` | `-9999` | マージ後 GeoTIFF と地理院標高タイルの NoData 値 |
 | `TARGET_SRS` | `EPSG:4326` | 入力が別の座標系なら再投影する。空なら入力のまま。`EPSG:xxxx` 形式で指定する（後述） |
@@ -97,6 +100,26 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 `TARGET_SRS` は入力から読み取った `EPSG:xxxx` と文字列で比較する。`epsg:4326` のような
 別表記や WKT を渡すと一致せず、毎回再投影が走る。
 
+### タイルサイズ
+
+`RGB_TILE_SIZE` と `GSIDEM_TILE_SIZE` で、出力の種類ごとに 256 か 512 を選ぶ。
+既定は RGB 系が 512（Mapbox・Mapterhorn と同じ）、地理院標高タイルが 256（地理院の仕様）。
+
+256 px の Terrain-RGB を配信している先に合わせるときなどに、RGB 系を 256 にする。
+
+```bash
+docker run --rm -u `id -u`:`id -g` \
+  -v $(pwd)/data/out:/input -v $(pwd)/output:/output \
+  -e RGB_TILE_SIZE=256 dem2tiles
+```
+
+- RGB 系のタイルは `tile_driver.py` が描いている（rio-rgbify / rio-terrarium からは符号化だけを使う）ので、
+  両ツールの 512 px 固定には縛られない
+- 地理院標高タイルは `gdal2NPtiles` の `--tilesize` に渡す
+- 同じ解像度に届くズームはタイルサイズで 1 段変わるので、`auto` の最大ズームもそれに合わせて変わる
+  （0.5m グリッドなら 256 px で z18、512 px で z17）
+- 既定のまま動かした場合の出力は、この設定を入れる前と全ファイル同一
+
 ### 最大ズームの自動決定
 
 `auto` は入力の画素サイズから決める。Web Mercator の地上分解能が入力の格子間隔より
@@ -104,8 +127,8 @@ RGB 系と gsidem で最大ズームが 1 段ちがうのは正しい挙動（�
 
 **ズームはタイルサイズに依存する。** 512 px のタイルは 256 px のタイルと同じ範囲を
 倍の密度で描くので、同じ解像度に 1 段手前のズームで到達する。`rio rgbify` と
-`rio terrarium` は 512 px、`gdal2NPtiles` は 256 px なので、同じ入力でも正しい
-最大ズームが 1 段ちがう。
+`auto` はそれぞれの `*_TILE_SIZE` に合わせて最大ズームを決める。既定では RGB 系が 512 px、
+地理院標高タイルが 256 px なので、同じ入力でも最大ズームが 1 段ちがう。
 
 0.5m グリッドを緯度 35.7° で変換した場合:
 
