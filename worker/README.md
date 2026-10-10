@@ -19,6 +19,20 @@ https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-terrain-rgb/{z}/{x}/{y}.
 https://tiles.shi-works.com/pref-yamanashi/yamanashi-lp-dem-png/{z}/{x}/{y}.png
 ```
 
+### 複数アーカイブに分かれたデータ（ピラミッド）
+
+Mapterhorn の配布形式（z0–12 の `planet.pmtiles` と、z13 以上を z6 タイル単位に分けた `6-{x}-{y}.pmtiles`）を
+1 つの名前で引けるよう、`src/index.ts` の `PYRAMIDS` でズームごとに読むアーカイブを切り替える。
+
+| リクエスト | 読む R2 のキー |
+| --- | --- |
+| `https://tiles.shi-works.com/mapterhorn/{z}/{x}/{y}.webp`（z ≤ 12） | `pmtiles/mapterhorn/planet-japan.pmtiles` |
+| 同（z ≥ 13） | `pmtiles/mapterhorn/6-{x>>(z-6)}-{y>>(z-6)}.pmtiles` |
+| `https://tiles.shi-works.com/mapterhorn.json` | `planet-japan` の TileJSON（maxzoom を 16 に上書き） |
+
+R2 への配置と週次更新は [shiwaku/japan-basemap-pmtiles](https://github.com/shiwaku/japan-basemap-pmtiles) が行う（日本域のみ）。
+サブピラミッドが無い所は 404。
+
 - 拡張子は中身の形式と一致させる。違えば 404（`.png` で WebP を返さない）
 - データの無いタイルは 404。dem2tiles の ZXY 出力でもファイルが無い所なので、挙動を合わせている
 - CORS は全オリジン。タイルは `Cache-Control: public, max-age=86400` で返し、Cache API にも置く
