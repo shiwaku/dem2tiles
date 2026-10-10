@@ -10,6 +10,11 @@
  * 例: /pref-yamanashi/yamanashi-lp-terrarium/12/3620/1610.webp
  *     → pmtiles/pref-yamanashi/yamanashi-lp-terrarium.pmtiles
  *
+ * 複数の PMTiles に分かれたデータ（Mapterhorn の planet + 6-x-y）は PYRAMIDS で 1 つの名前にまとめる。
+ *
+ *   GET /mapterhorn/{z}/{x}/{y}.webp → z<=12: pmtiles/mapterhorn/planet-japan.pmtiles
+ *                                       z>=13: pmtiles/mapterhorn/6-{x>>(z-6)}-{y>>(z-6)}.pmtiles
+ *
  * キーの第 1 階層 pmtiles/ は xserver-cleanup の R2-STRUCTURE.md §4 に従う。同じアーカイブは
  * shi-works.com/pmtiles/... からも pmtiles:// でそのまま読める。
  */
@@ -35,6 +40,34 @@ const CONTENT_TYPE: Partial<Record<TileType, [exts: string[], type: string]>> = 
   [TileType.Jpeg]: [['jpg'], 'image/jpeg'],
   [TileType.Webp]: [['webp'], 'image/webp'],
   [TileType.Avif]: [['avif'], 'image/avif'],
+}
+
+/**
+ * ズームで読むアーカイブを切り替えるデータ。Mapterhorn の配布形式（README の distribution）に合わせ、
+ * splitZoom 以上は z6 タイル単位のサブピラミッド {bundlePrefix}6-{x}-{y} を読む。
+ * サブピラミッドが無い所（日本の外）は R2 にキーが無く 404 になる。
+ */
+interface Pyramid {
+  /** z < splitZoom を読むアーカイブ（pmtiles/ からの相対、拡張子なし） */
+  low: string
+  splitZoom: number
+  /** サブピラミッドの名前の接頭辞（pmtiles/ からの相対） */
+  bundlePrefix: string
+  /** サブピラミッドを含めた最大ズーム。TileJSON の maxzoom に出す */
+  maxZoom: number
+}
+
+const PYRAMIDS: Record<string, Pyramid> = {
+  mapterhorn: { low: 'mapterhorn/planet-japan', splitZoom: 13, bundlePrefix: 'mapterhorn/', maxZoom: 16 },
+}
+
+/** ピラミッドの名前と ZXY から、実際に読むアーカイブの名前を決める */
+export function resolveArchive(name: string, z: number, x: number, y: number): string {
+  const py = PYRAMIDS[name]
+  if (!py) return name
+  if (z < py.splitZoom) return py.low
+  const s = z - 6
+  return `${py.bundlePrefix}6-${x >> s}-${y >> s}`
 }
 
 class NotFound extends Error {}
@@ -90,7 +123,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     const [, name, zs, xs, ys, ext] = t
     const z = Number(zs), x = Number(xs), y = Number(ys)
     if (x >= 2 ** z || y >= 2 ** z) return empty(400)
-    const p = archive(env, name!)
+    const p = archive(env, resolveArchive(name!, z, x, y))
     const header = await p.getHeader()
     const ct = CONTENT_TYPE[header.tileType]
     // 拡張子は中身と一致させる。.png で WebP を返すと、拡張子で形式を決める利用側が壊れる
@@ -111,7 +144,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   const j = TILEJSON_PATH.exec(url.pathname)
   if (j) {
     const name = j[1]!
-    const tilejson = await archive(env, name).getTileJson(`${url.origin}/${name}`)
+    const py = PYRAMIDS[name]
+    const tilejson = await archive(env, py?.low ?? name).getTileJson(`${url.origin}/${name}`)
+    if (py) (tilejson as { maxzoom: number }).maxzoom = py.maxZoom
     return Response.json(tilejson, {
       headers: { ...CORS, 'Cache-Control': `public, max-age=${TILE_MAX_AGE}` },
     })
