@@ -30,7 +30,7 @@ Mapterhorn の配布形式（z0–12 の `planet.pmtiles` と、z13 以上を z6
 | 同（z ≥ 13） | `pmtiles/mapterhorn/6-{x>>(z-6)}-{y>>(z-6)}.pmtiles` |
 | `https://tiles.shi-works.com/mapterhorn.json` | `planet-japan` の TileJSON（maxzoom を 16 に上書き） |
 
-R2 への配置と週次更新は [shiwaku/japan-basemap-pmtiles](https://github.com/shiwaku/japan-basemap-pmtiles) が行う（日本域のみ）。
+R2 への配置と週次更新は [shiwaku/japan-basemap-tile-pipeline](https://github.com/shiwaku/japan-basemap-tile-pipeline) が行う（日本域のみ）。
 サブピラミッドが無い所は 404。
 
 - 拡張子は中身の形式と一致させる。違えば 404（`.png` で WebP を返さない）
