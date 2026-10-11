@@ -9,6 +9,7 @@ import {
   CONTOUR_SOURCE,
   CONTOUR_TEXT_ID,
   DEFAULT_HILLSHADE_METHOD,
+  DEFAULT_REGION,
   DEM_SOURCE,
   HILLSHADE_ID,
   HILLSHADE_METHODS,
@@ -21,6 +22,7 @@ import {
   demSourceSpec,
   hillshadeLayer,
   regionAt,
+  regionByKey,
   registerDemProtocols,
   type DemDef,
   type DemKind,
@@ -51,12 +53,12 @@ import { applyThemeAttr, initialTheme, type Theme } from './theme'
  */
 
 /**
- * 最初に開く地域。URL の #ズーム/緯度/経度 がどこかの地域を指していればそこ、無ければ先頭（静岡）。
+ * 最初に開く地域。URL の #ズーム/緯度/経度 がどこかの地域を指していればそこ、無ければ既定（山梨）。
  * 共有された URL を開いたとき、その場所にデータのある地域を選んでおく。
  */
 function initialRegion(): Region {
   const [, lat, lng] = location.hash.slice(1).split('/').map(Number)
-  return (lat !== undefined && lng !== undefined && regionAt(lng, lat)) || REGIONS[0]!
+  return (lat !== undefined && lng !== undefined && regionAt(lng, lat)) || regionByKey(DEFAULT_REGION)
 }
 
 const isMobile = window.matchMedia('(max-width: 640px)').matches
