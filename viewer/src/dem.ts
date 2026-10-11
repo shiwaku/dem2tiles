@@ -151,8 +151,11 @@ export const REGIONS: Region[] = [
   },
 ]
 
+/** 最初に開く地域（URL がどの地域も指していないとき）。切替の並び順とは別に決める。 */
+export const DEFAULT_REGION: RegionKey = 'yamanashi'
+
 export const regionByKey = (key: string): Region =>
-  REGIONS.find((r) => r.key === key) ?? REGIONS[0]!
+  REGIONS.find((r) => r.key === key) ?? REGIONS.find((r) => r.key === DEFAULT_REGION)!
 
 /** 経緯度を含む地域。どれにも入らなければ undefined。 */
 export const regionAt = (lng: number, lat: number): Region | undefined =>
